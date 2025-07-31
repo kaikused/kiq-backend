@@ -7,22 +7,17 @@ import re
 import urllib.parse
 import spacy
 from spacy.matcher import Matcher
-# --- MODIFICACIÓN: Importaciones añadidas ---
 import uuid
-from google.cloud import vision
+# Ya no necesitamos la API de Vision en el backend para este flujo
+# from google.cloud import vision
 
 # --- CONFIGURACIÓN INICIAL ---
 load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-# --- MODIFICACIÓN: Configuración de credenciales de Google Cloud ---
-# Asegúrate de que el archivo 'google-credentials.json' esté en la misma carpeta que app.py
-try:
-    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'google-credentials.json'
-except Exception as e:
-    print(f"Advertencia: No se pudo establecer la variable de entorno para las credenciales de Google. Error: {e}")
-
+# Ya no se necesita si no usamos Vision API en el backend
+# os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'google-credentials.json'
 
 try:
     nlp = spacy.load("es_core_news_sm")
@@ -30,7 +25,7 @@ except OSError:
     print("Modelo de spaCy no encontrado. Ejecuta: python -m spacy download es_core_news_sm")
     nlp = None
 
-# --- BASE DE DATOS DE CONOCIMIENTO (TARIFARIO) BILINGÜE Y COMPLETO ---
+# --- TARIFARIO Y NÚMEROS (Sin cambios) ---
 TARIFARIO = {
     "armario": {
         "keywords": [
@@ -201,15 +196,12 @@ TARIFARIO = {
         "display_name": {"es": "Mueble de Cocina", "en": "Kitchen Cabinet"}
     }
 }
-
-# --- DICCIONARIO BILINGÜE DE NÚMEROS ---
 NUMEROS_TEXTO = {
     "un": 1, "una": 1, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10,
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10
 }
 
-# --- FUNCIÓN DE ANÁLISIS MEJORADA (CON SPACY MATCHER) ---
-# (Esta función no se modifica)
+# --- FUNCIÓN DE ANÁLISIS DE TEXTO ---
 def analizar_descripcion_con_spacy(descripcion):
     if not nlp:
         return {"error": "Modelo de spaCy no cargado"}
@@ -297,28 +289,48 @@ def analizar_descripcion_con_spacy(descripcion):
 
     return analisis
 
-# --- RUTA DE CÁLCULO MEJORADA (CON DESGLOSE BILINGÜE Y DISTANCIA REAL) ---
-# (Esta función no se modifica)
+# --- RUTA DE CÁLCULO UNIFICADA Y MEJORADA ---
 @app.route('/calcular_presupuesto', methods=['POST'])
 def calcular_presupuesto():
-    data = request.json
-    descripcion = data.get('descripcion_texto_mueble', '')
-    direccion_cliente = data.get('direccion_cliente', '')
-    lang = data.get('language', 'es')
+    image_url = None
+    # Comprobamos si la petición es JSON (cálculo final con dirección) o FormData (análisis inicial)
+    if request.is_json:
+        data = request.json
+        descripcion = data.get('descripcion_texto_mueble', '')
+        direccion_cliente = data.get('direccion_cliente', '')
+        lang = data.get('language', 'es')
+        image_url = data.get('image_url') # Recibimos la URL de la imagen si ya se guardó
+    else: # Es FormData
+        descripcion = request.form.get('descripcion_texto_mueble', '')
+        lang = request.form.get('language', 'es')
+        direccion_cliente = None # No hay dirección en el paso inicial
 
+    # --- LÓGICA PARA MANEJAR LA IMAGEN (SI SE ADJUNTÓ EN EL PASO INICIAL) ---
+    if 'imagen' in request.files:
+        file = request.files['imagen']
+        if file and file.filename != '':
+            try:
+                filename = str(uuid.uuid4()) + os.path.splitext(file.filename)[1]
+                uploads_dir = os.path.join('static', 'uploads')
+                os.makedirs(uploads_dir, exist_ok=True)
+                filepath = os.path.join(uploads_dir, filename)
+                file.save(filepath)
+
+                base_url = os.getenv('BASE_URL', 'http://127.0.0.1:5000')
+                image_url = f"{base_url}/{filepath.replace(os.path.sep, '/')}"
+                print(f"Imagen guardada. URL: {image_url}")
+            except Exception as e:
+                print(f"Error al guardar la imagen: {e}")
+
+    if not descripcion:
+        return jsonify({"error": "La descripción de texto es obligatoria"}), 400
+        
     analisis = analizar_descripcion_con_spacy(descripcion)
-    precio_base = analisis["coste_total_base"] + analisis["coste_total_extras"]
     
-    desglose_precio = []
-    for item in analisis["muebles_encontrados"]:
-        mueble_data = TARIFARIO.get(item["tipo"], {"precio": 40, "display_name": {"es": "Otro", "en": "Other"}})
-        coste_mueble = mueble_data.get("precio", 40) * item["cantidad"]
-        nombre_item = mueble_data.get("display_name", {}).get(lang, item["tipo"].replace("_", " ").title())
-        desglose_precio.append({"item": nombre_item, "cantidad": item["cantidad"], "precio": coste_mueble})
-
-    coste_desplazamiento = 0
-    zona_info = "No se proporcionó dirección" if lang == 'es' else "No address provided"
-    if direccion_cliente:
+    if direccion_cliente: # Es el cálculo final con la dirección
+        precio_base = analisis["coste_total_base"] + analisis["coste_total_extras"]
+        coste_desplazamiento = 0
+        zona_info = "No se proporcionó dirección" if lang == 'es' else "No address provided"
         try:
             api_key = os.getenv('GOOGLE_API_KEY')
             origin_address = os.getenv('ORIGIN_ADDRESS')
@@ -328,7 +340,7 @@ def calcular_presupuesto():
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             distancia_data = response.json()
-            if distancia_data['status'] == 'OK' and distancia_data['rows'][0]['elements'][0]['status'] == 'OK':
+            if distancia_data.get('status') == 'OK' and distancia_data['rows'][0]['elements'][0].get('status') == 'OK':
                 distancia_km = distancia_data['rows'][0]['elements'][0]['distance']['value'] / 1000
                 if distancia_km > 40: coste_desplazamiento = 35
                 elif distancia_km > 20: coste_desplazamiento = 25
@@ -339,143 +351,41 @@ def calcular_presupuesto():
         except Exception as e:
             print(f"Error al calcular la distancia: {e}")
             zona_info = "Error de cálculo" if lang == 'es' else "Calculation error"
-
-    if coste_desplazamiento > 0:
-        nombre_desplazamiento = "Desplazamiento" if lang == 'es' else "Travel Cost"
-        desglose_precio.append({"item": nombre_desplazamiento, "cantidad": 1, "precio": coste_desplazamiento})
-
-    precio_final_estimado = max(precio_base + coste_desplazamiento, 30)
-
-    response = {
-        "precio_estimado": precio_final_estimado,
-        "desglose": desglose_precio,
-        "zona_desplazamiento_info": zona_info,
-        "necesita_anclaje": analisis.get("necesita_anclaje_general", False),
-    }
-    return jsonify(response)
-
-# --- MODIFICACIÓN: Nueva ruta para analizar imágenes ---
-@app.route('/analizar_imagen', methods=['POST'])
-def analizar_imagen():
-    if 'imagen' not in request.files:
-        return jsonify({"error": "No se encontró el archivo de imagen"}), 400
-
-    file = request.files['imagen']
-    
-    # Guardar la imagen en el servidor
-    filename = str(uuid.uuid4()) + os.path.splitext(file.filename)[1]
-    filepath = os.path.join('static', 'uploads', filename)
-    file.save(filepath)
-
-    # Crear la URL pública de la imagen
-    base_url = os.getenv('BASE_URL', 'http://127.0.0.1:5000')
-    image_url = f"{base_url}/{filepath.replace(os.path.sep, '/')}"
-
-    file.seek(0)
-    content = file.read()
-
-    # Analizar con Google Vision
-    try:
-        client = vision.ImageAnnotatorClient()
-        image = vision.Image(content=content)
         
-        # --- LÓGICA MEJORADA: Usamos OBJECT LOCALIZATION ---
-        # Esto es más preciso que las etiquetas generales, ya que detecta objetos específicos.
-        objects = client.object_localization(image=image).localized_object_annotations
+        desglose_precio = []
+        for item in analisis["muebles_encontrados"]:
+            mueble_data = TARIFARIO.get(item["tipo"], {"precio": 40, "display_name": {"es": "Otro", "en": "Other"}})
+            coste_mueble = mueble_data.get("precio", 40) * item["cantidad"]
+            nombre_item = mueble_data.get("display_name", {}).get(lang, item["tipo"].replace("_", " ").title())
+            desglose_precio.append({"item": nombre_item, "cantidad": item["cantidad"], "precio": coste_mueble})
 
-        if not objects:
-            # Si no detecta objetos, usamos las etiquetas como plan B
-            print("No se detectaron objetos, usando etiquetas generales como fallback.")
-            response = client.label_detection(image=image)
-            labels = response.label_annotations
-            if response.error.message:
-                raise Exception(response.error.message)
-            # Convertimos las etiquetas a un formato similar al de los objetos para procesarlas igual
-            objects = [{'name': label.description, 'score': label.score} for label in labels]
+        if coste_desplazamiento > 0:
+            nombre_desplazamiento = "Desplazamiento" if lang == 'es' else "Travel Cost"
+            desglose_precio.append({"item": nombre_desplazamiento, "cantidad": 1, "precio": coste_desplazamiento})
 
-    except Exception as e:
-        print(f"Error en la API de Vision: {e}")
-        return jsonify({"error": f"Error en la API de Vision: {e}"}), 500
+        precio_final_estimado = max(precio_base + coste_desplazamiento, 30)
 
-    # --- LÓGICA MEJORADA: Encontrar la mejor coincidencia basada en la puntuación ---
-    
-    posibles_muebles = {}
-    
-    # Recorremos los objetos/etiquetas detectados por Google
-    for obj in objects:
-        # Normalizamos el nombre del objeto detectado (ej: "Bed frame" -> "bed frame")
-        detected_name = obj.name.lower()
-        score = obj.score
+        response_data = {
+            "precio_estimado": precio_final_estimado,
+            "desglose": desglose_precio,
+            "zona_desplazamiento_info": zona_info,
+            "necesita_anclaje": analisis.get("necesita_anclaje_general", False),
+            "image_url": image_url
+        }
+    else: # Es el análisis inicial, solo necesitamos saber si necesita anclaje
+        response_data = {
+            "necesita_anclaje": analisis.get("necesita_anclaje_general", False),
+            "image_url": image_url
+        }
 
-        # Comparamos con nuestro tarifario
-        for mueble_key, data in TARIFARIO.items():
-            if detected_name in data["keywords"]:
-                # Si encontramos una coincidencia, guardamos su puntuación.
-                # Si ya habíamos encontrado este tipo de mueble, nos quedamos con la puntuación más alta.
-                if mueble_key not in posibles_muebles or score > posibles_muebles[mueble_key]:
-                    posibles_muebles[mueble_key] = score
-    
-    # --- DECISIÓN INTELIGENTE v2 ---
-    muebles_encontrados = []
-    if posibles_muebles:
-        # Ordenamos los muebles encontrados por su puntuación, de mayor a menor
-        muebles_ordenados = sorted(posibles_muebles.items(), key=lambda item: item[1], reverse=True)
-        
-        # Nos quedamos con todos los resultados que superen un umbral de confianza.
-        CONFIDENCE_THRESHOLD = 0.75  # Umbral de confianza del 75%
-
-        for mueble, puntuacion in muebles_ordenados:
-            if puntuacion >= CONFIDENCE_THRESHOLD:
-                print(f"Coincidencia VÁLIDA encontrada: {mueble} con una confianza de {puntuacion:.2%}")
-                # Evitar duplicados si varias keywords apuntan al mismo mueble
-                if not any(m['tipo'] == mueble for m in muebles_encontrados):
-                    muebles_encontrados.append({"tipo": mueble, "cantidad": 1})
-            else:
-                # Como la lista está ordenada, si uno no cumple, los siguientes tampoco.
-                print(f"Coincidencia descartada por baja confianza: {mueble} ({puntuacion:.2%})")
-                break
-
-    # Si después de filtrar por confianza no encontramos nada, usamos 'otro'.
-    if not muebles_encontrados:
-        print("No se encontraron coincidencias claras por encima del umbral. Usando 'otro'.")
-        muebles_encontrados.append({"tipo": "otro", "cantidad": 1})
-
-
-    # El resto del cálculo del presupuesto es igual
-    coste_total_base = 0
-    necesita_anclaje_general = False
-    for item in muebles_encontrados:
-        mueble_data = TARIFARIO.get(item["tipo"], {"precio": 40, "necesita_anclaje": True})
-        coste_total_base += item["cantidad"] * mueble_data.get("precio", 40)
-        if mueble_data.get("necesita_anclaje"):
-            necesita_anclaje_general = True
-    
-    desglose_precio = []
-    lang = request.form.get('language', 'es')
-    for item in muebles_encontrados:
-        mueble_data = TARIFARIO.get(item["tipo"], {"precio": 40, "display_name": {"es": "Otro", "en": "Other"}})
-        coste_mueble = mueble_data.get("precio", 40) * item["cantidad"]
-        nombre_item = mueble_data.get("display_name", {}).get(lang, "Otro")
-        desglose_precio.append({"item": nombre_item, "cantidad": item["cantidad"], "precio": coste_mueble})
-
-    response_data = {
-        "precio_estimado": coste_total_base,
-        "desglose": desglose_precio,
-        "necesita_anclaje": necesita_anclaje_general,
-        "zona_desplazamiento_info": "Dirección no proporcionada",
-        "image_url": image_url
-    }
-    
     return jsonify(response_data)
 
-
 # --- RUTA PARA LAS RESEÑAS DE GOOGLE ---
-# (Esta función no se modifica)
 @app.route('/get-reviews')
 def get_google_reviews():
     try:
         api_key = os.getenv('GOOGLE_API_KEY')
-        place_id = 'ChIJ1XtcHYfyly4Re1sFUXqtre8'
+        place_id = 'ChIJ1XtcHYfyly4Re1sFUXqtre8' # Tu Place ID correcto
         lang = request.args.get('language', 'es')
         url = f"https://maps.googleapis.com/maps/api/place/details/json?place_id={place_id}&fields=reviews&key={api_key}&language={lang}"
         response = requests.get(url, timeout=10)
