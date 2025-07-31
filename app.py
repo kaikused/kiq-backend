@@ -475,7 +475,7 @@ def analizar_imagen():
 def get_google_reviews():
     try:
         api_key = os.getenv('GOOGLE_API_KEY')
-        place_id = 'ChIJqw-jW3f3cg0RqMnZfeTvCJU'
+        place_id = 'ChIJ1XtcHYfyly4Re1sFUXqtre8'
         lang = request.args.get('language', 'es')
         url = f"https://maps.googleapis.com/maps/api/place/details/json?place_id={place_id}&fields=reviews&key={api_key}&language={lang}"
         response = requests.get(url, timeout=10)
