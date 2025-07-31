@@ -8,16 +8,19 @@ import urllib.parse
 import spacy
 from spacy.matcher import Matcher
 import uuid
-# Ya no necesitamos la API de Vision en el backend para este flujo
-# from google.cloud import vision
+from google.cloud import vision
 
 # --- CONFIGURACIÓN INICIAL ---
 load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-# Ya no se necesita si no usamos Vision API en el backend
-# os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'google-credentials.json'
+# --- CONFIGURACIÓN DE CREDENCIALES DE GOOGLE CLOUD ---
+# Asegúrate de que el archivo 'google-credentials.json' esté en la misma carpeta que app.py
+try:
+    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'google-credentials.json'
+except Exception as e:
+    print(f"Advertencia: No se pudo establecer la variable de entorno para las credenciales de Google. Error: {e}")
 
 try:
     nlp = spacy.load("es_core_news_sm")
@@ -25,7 +28,7 @@ except OSError:
     print("Modelo de spaCy no encontrado. Ejecuta: python -m spacy download es_core_news_sm")
     nlp = None
 
-# --- TARIFARIO Y NÚMEROS (Sin cambios) ---
+# --- TARIFARIO Y NÚMEROS (COMPLETO) ---
 TARIFARIO = {
     "armario": {
         "keywords": [
@@ -293,6 +296,8 @@ def analizar_descripcion_con_spacy(descripcion):
 @app.route('/calcular_presupuesto', methods=['POST'])
 def calcular_presupuesto():
     image_url = None
+    image_labels = None # Variable para guardar los metadatos de la IA
+
     # Comprobamos si la petición es JSON (cálculo final con dirección) o FormData (análisis inicial)
     if request.is_json:
         data = request.json
@@ -300,6 +305,7 @@ def calcular_presupuesto():
         direccion_cliente = data.get('direccion_cliente', '')
         lang = data.get('language', 'es')
         image_url = data.get('image_url') # Recibimos la URL de la imagen si ya se guardó
+        image_labels = data.get('image_labels') # Recibimos las etiquetas si ya se generaron
     else: # Es FormData
         descripcion = request.form.get('descripcion_texto_mueble', '')
         lang = request.form.get('language', 'es')
@@ -310,6 +316,7 @@ def calcular_presupuesto():
         file = request.files['imagen']
         if file and file.filename != '':
             try:
+                # 1. Guardar la imagen en el servidor
                 filename = str(uuid.uuid4()) + os.path.splitext(file.filename)[1]
                 uploads_dir = os.path.join('static', 'uploads')
                 os.makedirs(uploads_dir, exist_ok=True)
@@ -319,8 +326,23 @@ def calcular_presupuesto():
                 base_url = os.getenv('BASE_URL', 'http://127.0.0.1:5000')
                 image_url = f"{base_url}/{filepath.replace(os.path.sep, '/')}"
                 print(f"Imagen guardada. URL: {image_url}")
+
+                # 2. Analizar la imagen con Google Vision para obtener metadatos
+                file.seek(0)
+                content = file.read()
+                client = vision.ImageAnnotatorClient()
+                image = vision.Image(content=content)
+                response = client.label_detection(image=image)
+                labels = response.label_annotations
+                if response.error.message:
+                    raise Exception(response.error.message)
+                
+                # Guardamos las 3 etiquetas más relevantes como metadatos
+                image_labels = [f"{label.description} ({label.score:.0%})" for label in labels[:3]]
+                print(f"Metadatos de la imagen: {image_labels}")
+
             except Exception as e:
-                print(f"Error al guardar la imagen: {e}")
+                print(f"Error al procesar la imagen con Vision API: {e}")
 
     if not descripcion:
         return jsonify({"error": "La descripción de texto es obligatoria"}), 400
@@ -370,12 +392,14 @@ def calcular_presupuesto():
             "desglose": desglose_precio,
             "zona_desplazamiento_info": zona_info,
             "necesita_anclaje": analisis.get("necesita_anclaje_general", False),
-            "image_url": image_url
+            "image_url": image_url,
+            "image_labels": image_labels
         }
     else: # Es el análisis inicial, solo necesitamos saber si necesita anclaje
         response_data = {
             "necesita_anclaje": analisis.get("necesita_anclaje_general", False),
-            "image_url": image_url
+            "image_url": image_url,
+            "image_labels": image_labels
         }
 
     return jsonify(response_data)
