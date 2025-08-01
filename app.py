@@ -344,11 +344,18 @@ def calcular_presupuesto():
             except Exception as e:
                 print(f"Error al procesar la imagen con Vision API: {e}")
 
-    if not descripcion:
-        return jsonify({"error": "La descripción de texto es obligatoria"}), 400
-        
-    analisis = analizar_descripcion_con_spacy(descripcion)
+        analisis = None
+    if request.is_json and 'analisis' in request.json:
+            # Si el frontend nos devuelve el análisis, lo usamos directamente
+            analisis = request.json['analisis']
+    elif descripcion:
+            # Si no, lo calculamos desde el texto
+            analisis = analizar_descripcion_con_spacy(descripcion)
     
+    if not analisis:
+        # Si no hay ni análisis previo ni descripción, hay un error
+        return jsonify({"error": "No se proporcionó descripción ni análisis previo."}), 400
+        
     if direccion_cliente: # Es el cálculo final con la dirección
         precio_base = analisis["coste_total_base"] + analisis["coste_total_extras"]
         coste_desplazamiento = 0
@@ -375,16 +382,24 @@ def calcular_presupuesto():
             zona_info = "Error de cálculo" if lang == 'es' else "Calculation error"
         
         desglose_precio = []
+        # El bucle FOR empieza aquí
         for item in analisis["muebles_encontrados"]:
             mueble_data = TARIFARIO.get(item["tipo"], {"precio": 40, "display_name": {"es": "Otro", "en": "Other"}})
             coste_mueble = mueble_data.get("precio", 40) * item["cantidad"]
             nombre_item = mueble_data.get("display_name", {}).get(lang, item["tipo"].replace("_", " ").title())
             desglose_precio.append({"item": nombre_item, "cantidad": item["cantidad"], "precio": coste_mueble})
+        # El bucle FOR termina aquí
 
+        # El bloque IF para los extras debe empezar aquí, fuera del bucle
+        if analisis.get("coste_total_extras", 0) > 0:
+            nombre_extras = "Ajustes y Extras" if lang == 'es' else "Adjustments & Extras"
+            detalles = f" ({', '.join(analisis.get('detalles_extras', []))})" if analisis.get('detalles_extras') else ""
+            desglose_precio.append({"item": f"{nombre_extras}{detalles}", "cantidad": 1, "precio": analisis["coste_total_extras"]})
+
+        # El bloque IF para el desplazamiento va después
         if coste_desplazamiento > 0:
             nombre_desplazamiento = "Desplazamiento" if lang == 'es' else "Travel Cost"
             desglose_precio.append({"item": nombre_desplazamiento, "cantidad": 1, "precio": coste_desplazamiento})
-
         precio_final_estimado = max(precio_base + coste_desplazamiento, 30)
 
         response_data = {
@@ -397,11 +412,12 @@ def calcular_presupuesto():
         }
     else: # Es el análisis inicial, solo necesitamos saber si necesita anclaje
         response_data = {
+            "analisis": analisis,
             "necesita_anclaje": analisis.get("necesita_anclaje_general", False),
             "image_url": image_url,
             "image_labels": image_labels
         }
-
+    
     return jsonify(response_data)
 
 # --- RUTA PARA LAS RESEÑAS DE GOOGLE ---
