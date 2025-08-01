@@ -8,3 +8,6 @@ google-credentials.json
 
 # Archivos del sistema operativo
 .DS_Store
+
+# Ignorar la carpeta de subidas de archivos de usuarios
+static/uploads/

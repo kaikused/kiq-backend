@@ -13,10 +13,12 @@ cymem==2.0.11
 es_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl#sha256=e451a83d6df79b87e9eed0cb553f03e99e36a3bab18a7b79f0dcfd1fdf875e12
 Flask==3.1.1
 flask-cors==6.0.1
+Flask-SQLAlchemy==3.1.1
 google-api-core==2.25.1
 google-auth==2.40.3
 google-cloud-vision==3.10.2
 googleapis-common-protos==1.70.0
+greenlet==3.2.3
 grpcio==1.74.0
 grpcio-status==1.74.0
 gunicorn==23.0.0
@@ -50,6 +52,7 @@ smart_open==7.3.0.post1
 spacy==3.8.7
 spacy-legacy==3.0.12
 spacy-loggers==1.0.5
+SQLAlchemy==2.0.42
 srsly==2.5.1
 thinc==8.3.6
 tqdm==4.67.1

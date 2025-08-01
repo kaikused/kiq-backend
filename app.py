@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect, abort
 from flask_cors import CORS
 from dotenv import load_dotenv
 import requests
@@ -9,14 +9,31 @@ import spacy
 from spacy.matcher import Matcher
 import uuid
 from google.cloud import vision
+from datetime import datetime
+from flask_sqlalchemy import SQLAlchemy
+import random
+import string
 
 # --- CONFIGURACIÓN INICIAL ---
 load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
+# --- CONFIGURACIÓN DE LA BASE DE DATOS ---
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+# --- MODELO DE LA BASE DE DATOS PARA LOS ENLACES ---
+class Link(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    original_url = db.Column(db.String(512), nullable=False)
+    short_code = db.Column(db.String(10), unique=True, nullable=False)
+
+    def __repr__(self):
+        return f"<Link {self.short_code}>"
+
 # --- CONFIGURACIÓN DE CREDENCIALES DE GOOGLE CLOUD ---
-# Asegúrate de que el archivo 'google-credentials.json' esté en la misma carpeta que app.py
 try:
     os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'google-credentials.json'
 except Exception as e:
@@ -295,68 +312,81 @@ def analizar_descripcion_con_spacy(descripcion):
 # --- RUTA DE CÁLCULO UNIFICADA Y MEJORADA ---
 @app.route('/calcular_presupuesto', methods=['POST'])
 def calcular_presupuesto():
-    image_url = None
-    image_labels = None # Variable para guardar los metadatos de la IA
+    # --- PASO 1: INICIALIZAR VARIABLES ---
+    image_labels = None
+    image_urls = []
+    analisis = None
+    direccion_cliente = None
+    lang = 'es'
 
-    # Comprobamos si la petición es JSON (cálculo final con dirección) o FormData (análisis inicial)
+    # --- PASO 2: DISTINGUIR ENTRE PETICIÓN INICIAL (FORMDATA) Y FINAL (JSON) ---
     if request.is_json:
+        # Es la petición final con la dirección
         data = request.json
-        descripcion = data.get('descripcion_texto_mueble', '')
-        direccion_cliente = data.get('direccion_cliente', '')
+        analisis = data.get('analisis')
+        direccion_cliente = data.get('direccion_cliente')
         lang = data.get('language', 'es')
-        image_url = data.get('image_url') # Recibimos la URL de la imagen si ya se guardó
-        image_labels = data.get('image_labels') # Recibimos las etiquetas si ya se generaron
-    else: # Es FormData
+        image_urls = data.get('image_urls', []) 
+        image_labels = data.get('image_labels')
+    
+    else: # Es FormData, la petición inicial
         descripcion = request.form.get('descripcion_texto_mueble', '')
         lang = request.form.get('language', 'es')
-        direccion_cliente = None # No hay dirección en el paso inicial
+        
+        # --- LÓGICA PARA MANEJAR IMÁGENES ---
+        client_name = request.form.get('client_name', 'sin_nombre').replace(' ', '_').lower()
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        unique_folder_name = f"{client_name}_{timestamp}"
+        
+        files = request.files.getlist('imagen')
 
-    # --- LÓGICA PARA MANEJAR LA IMAGEN (SI SE ADJUNTÓ EN EL PASO INICIAL) ---
-    if 'imagen' in request.files:
-        file = request.files['imagen']
-        if file and file.filename != '':
-            try:
-                # 1. Guardar la imagen en el servidor
-                filename = str(uuid.uuid4()) + os.path.splitext(file.filename)[1]
-                uploads_dir = os.path.join('static', 'uploads')
-                os.makedirs(uploads_dir, exist_ok=True)
-                filepath = os.path.join(uploads_dir, filename)
-                file.save(filepath)
+        if files and files[0].filename != '':
+            client_upload_path = os.path.join('static', 'uploads', unique_folder_name)
+            os.makedirs(client_upload_path, exist_ok=True)
+            for file in files:
+                if file:
+                    try:
+                        filename = str(uuid.uuid4()) + os.path.splitext(file.filename)[1]
+                        filepath = os.path.join(client_upload_path, filename)
+                        file.save(filepath)
 
-                base_url = os.getenv('BASE_URL', 'http://127.0.0.1:5000')
-                image_url = f"{base_url}/{filepath.replace(os.path.sep, '/')}"
-                print(f"Imagen guardada. URL: {image_url}")
+                        base_url = os.getenv('BASE_URL', 'http://127.0.0.1:5000')
+                        original_image_url = f"{base_url}/{filepath.replace(os.path.sep, '/')}"
+                        
+                        # Lógica del acortador
+                        short_code = ''.join(random.choices(string.ascii_letters + string.digits, k=7))
+                        new_link = Link(original_url=original_image_url, short_code=short_code)
+                        db.session.add(new_link)
+                        db.session.commit()
+                        
+                        short_url = f"{base_url}/r/{short_code}"
+                        image_urls.append(short_url) 
+                        print(f"Imagen guardada: {original_image_url} -> {short_url}")
 
-                # 2. Analizar la imagen con Google Vision para obtener metadatos
-                file.seek(0)
-                content = file.read()
-                client = vision.ImageAnnotatorClient()
-                image = vision.Image(content=content)
-                response = client.label_detection(image=image)
-                labels = response.label_annotations
-                if response.error.message:
-                    raise Exception(response.error.message)
-                
-                # Guardamos las 3 etiquetas más relevantes como metadatos
-                image_labels = [f"{label.description} ({label.score:.0%})" for label in labels[:3]]
-                print(f"Metadatos de la imagen: {image_labels}")
-
-            except Exception as e:
-                print(f"Error al procesar la imagen con Vision API: {e}")
-
-        analisis = None
-    if request.is_json and 'analisis' in request.json:
-            # Si el frontend nos devuelve el análisis, lo usamos directamente
-            analisis = request.json['analisis']
-    elif descripcion:
-            # Si no, lo calculamos desde el texto
-            analisis = analizar_descripcion_con_spacy(descripcion)
+                        # Analizar solo la primera imagen
+                        if not image_labels:
+                            file.seek(0)
+                            content = file.read()
+                            client = vision.ImageAnnotatorClient()
+                            image = vision.Image(content=content)
+                            response = client.label_detection(image=image)
+                            labels = response.label_annotations
+                            if response.error.message: raise Exception(response.error.message)
+                            
+                            image_labels = [f"{label.description} ({label.score:.0%})" for label in labels[:3]]
+                            print(f"Metadatos de la imagen: {image_labels}")
+                    except Exception as e:
+                        print(f"Error al procesar la imagen: {e}")
+        
+        # El análisis de texto se hace en la petición inicial
+        analisis = analizar_descripcion_con_spacy(descripcion)
     
+    # --- PASO 3: VALIDAR QUE TENEMOS UN ANÁLISIS ---
     if not analisis:
-        # Si no hay ni análisis previo ni descripción, hay un error
         return jsonify({"error": "No se proporcionó descripción ni análisis previo."}), 400
         
-    if direccion_cliente: # Es el cálculo final con la dirección
+    # --- PASO 4: CONSTRUIR Y DEVOLVER LA RESPUESTA ---
+    if direccion_cliente: # Si hay dirección, es el cálculo final
         precio_base = analisis["coste_total_base"] + analisis["coste_total_extras"]
         coste_desplazamiento = 0
         zona_info = "No se proporcionó dirección" if lang == 'es' else "No address provided"
@@ -382,24 +412,21 @@ def calcular_presupuesto():
             zona_info = "Error de cálculo" if lang == 'es' else "Calculation error"
         
         desglose_precio = []
-        # El bucle FOR empieza aquí
         for item in analisis["muebles_encontrados"]:
             mueble_data = TARIFARIO.get(item["tipo"], {"precio": 40, "display_name": {"es": "Otro", "en": "Other"}})
             coste_mueble = mueble_data.get("precio", 40) * item["cantidad"]
             nombre_item = mueble_data.get("display_name", {}).get(lang, item["tipo"].replace("_", " ").title())
             desglose_precio.append({"item": nombre_item, "cantidad": item["cantidad"], "precio": coste_mueble})
-        # El bucle FOR termina aquí
 
-        # El bloque IF para los extras debe empezar aquí, fuera del bucle
         if analisis.get("coste_total_extras", 0) > 0:
             nombre_extras = "Ajustes y Extras" if lang == 'es' else "Adjustments & Extras"
             detalles = f" ({', '.join(analisis.get('detalles_extras', []))})" if analisis.get('detalles_extras') else ""
             desglose_precio.append({"item": f"{nombre_extras}{detalles}", "cantidad": 1, "precio": analisis["coste_total_extras"]})
 
-        # El bloque IF para el desplazamiento va después
         if coste_desplazamiento > 0:
             nombre_desplazamiento = "Desplazamiento" if lang == 'es' else "Travel Cost"
             desglose_precio.append({"item": nombre_desplazamiento, "cantidad": 1, "precio": coste_desplazamiento})
+        
         precio_final_estimado = max(precio_base + coste_desplazamiento, 30)
 
         response_data = {
@@ -407,19 +434,27 @@ def calcular_presupuesto():
             "desglose": desglose_precio,
             "zona_desplazamiento_info": zona_info,
             "necesita_anclaje": analisis.get("necesita_anclaje_general", False),
-            "image_url": image_url,
+            "image_urls": image_urls,
             "image_labels": image_labels
         }
-    else: # Es el análisis inicial, solo necesitamos saber si necesita anclaje
+    else: # Si no hay dirección, es la respuesta del análisis inicial
         response_data = {
             "analisis": analisis,
             "necesita_anclaje": analisis.get("necesita_anclaje_general", False),
-            "image_url": image_url,
+            "image_urls": image_urls,
             "image_labels": image_labels
         }
     
     return jsonify(response_data)
-
+# --- RUTA PARA REDIRIGIR ENLACES CORTOS ---
+@app.route('/r/<short_code>')
+def redirect_to_url(short_code):
+    link = Link.query.filter_by(short_code=short_code).first()
+    if link:
+        return redirect(link.original_url)
+    else:
+        return abort(404) # Devuelve 'Not Found' si el código no existe
+    
 # --- RUTA PARA LAS RESEÑAS DE GOOGLE ---
 @app.route('/get-reviews')
 def get_google_reviews():
