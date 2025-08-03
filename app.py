@@ -469,6 +469,9 @@ def get_google_reviews():
     except Exception as e:
         print(f"Error al cargar reseñas: {e}")
         return jsonify({"error": "Error interno al cargar reseñas"}), 500
+    
+with app.app_context():
+        db.create_all()
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
