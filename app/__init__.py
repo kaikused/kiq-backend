@@ -49,18 +49,30 @@ def create_app():
     stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
     app.config["STRIPE_PUBLIC_KEY"] = os.getenv("STRIPE_PUBLIC_KEY")
 
-    # Configuración de Google Credentials (INTACTO)
+    # --- CONFIGURACIÓN DE GOOGLE CREDENTIALS (CORREGIDO PARA RENDER) ---
     try:
-        credentials_path = os.path.join(
-            app.root_path, '..', 'google-credentials.json'
-        )
+        credentials_path = os.path.join(app.root_path, '..', 'google-credentials.json')
+        
+        # 1. LÓGICA RENDER: Si existe la variable con el JSON crudo, creamos el archivo
+        # Esto soluciona el problema de no poder subir archivos JSON a Render
+        json_credentials_content = os.getenv('GOOGLE_CREDENTIALS_JSON')
+        
+        if json_credentials_content:
+            try:
+                with open(credentials_path, 'w') as f:
+                    f.write(json_credentials_content)
+                print(f"✅ Archivo google-credentials.json regenerado desde variable de entorno.")
+            except Exception as write_error:
+                print(f"❌ Error escribiendo el archivo de credenciales: {write_error}")
+
+        # 2. Configuración estándar: Apuntar la variable de entorno al archivo físico
         if os.path.exists(credentials_path):
             os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = credentials_path
         else:
-            print("Advertencia: No se encontró 'google-credentials.json'.")
-    # Se mantiene la excepción genérica por ser un chequeo de I/O y entorno
-    except Exception as e: # pylint: disable=broad-exception-caught
-        print(f"Advertencia: Error en credenciales Google: {e}")
+            print("⚠️ Advertencia: No se encontró 'google-credentials.json' ni la variable GOOGLE_CREDENTIALS_JSON.")
+            
+    except Exception as e:
+        print(f"Advertencia: Error general en configuración Google: {e}")
 
     # --- Inicializar Extensiones ---
     db.init_app(app)
