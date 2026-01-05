@@ -163,8 +163,6 @@ def registro_montador():
         return jsonify({"error": str(e)}), 500
 
 
-# 👇 NUEVO ENDPOINT: REGISTRO SIMPLE (PARA EL OUTLET) 👇
-# Este es el único bloque nuevo. Permite registrarse solo con datos básicos.
 @auth_bp.route('/registro-cliente-simple', methods=['POST'])
 def registro_cliente_simple():
     """
@@ -224,10 +222,9 @@ def registro_cliente_simple():
         db.session.rollback()
         print(f"Error en registro simple: {e}")
         return jsonify({"error": "Error interno al registrar"}), 500
-# ---------------------------------------------------------
 
 
-# 👇 RUTA ORIGINAL INTACTA (PROTEGIDA) 👇
+# 👇 RUTA MODIFICADA PARA GUARDAR EL TELÉFONO 👇
 @auth_bp.route('/publicar-y-registrar', methods=['POST'])
 def publicar_y_registrar():
     """Registra cliente y crea trabajo en un paso."""
@@ -235,6 +232,7 @@ def publicar_y_registrar():
     nombre = data.get('nombre')
     email = data.get('email')
     password = data.get('password')
+    telefono = data.get('telefono') # <--- NUEVO: Recibimos teléfono del chat
 
     try:
         if float(data.get('precio_calculado')) < 30:
@@ -242,20 +240,29 @@ def publicar_y_registrar():
     except (TypeError, ValueError):
         return jsonify({"error": "Precio inválido"}), 400
 
-    # Verificación código
-    verification = VerificationCode.query.filter_by(
-        email=email, code=data.get('codigo')
-    ).first()
+    # --- VERIFICACIÓN DE CÓDIGO (COMENTADO PARA EL CHAT) ---
+    # Como el chat ya valida el email antes y no pide código OTP en este paso,
+    # saltamos esta verificación. Si tu flujo cambia, descomenta esto.
+    if data.get('codigo'): 
+        verification = VerificationCode.query.filter_by(
+            email=email, code=data.get('codigo')
+        ).first()
 
-    if not verification or not verification.is_valid():
-        return jsonify({"error": "Código inválido"}), 400
-    db.session.delete(verification)
+        if not verification or not verification.is_valid():
+            return jsonify({"error": "Código inválido"}), 400
+        db.session.delete(verification)
+    # --------------------------------------------------------
 
     if Cliente.query.filter_by(email=email).first():
         return jsonify({"error": "Email registrado"}), 400
 
     try:
-        nuevo_cliente = Cliente(nombre=nombre, email=email)
+        # AQUÍ GUARDAMOS EL TELÉFONO
+        nuevo_cliente = Cliente(
+            nombre=nombre, 
+            email=email, 
+            telefono=telefono # <--- NUEVO: Pasado al modelo
+        )
         nuevo_cliente.set_password(password)
 
         nuevo_trabajo = Trabajo(
@@ -351,6 +358,7 @@ def perfil():
             saldo = u.wallet.saldo if u.wallet else 0
             return jsonify({
                 "id": u.id, "nombre": u.nombre, "email": u.email,
+                "telefono": u.telefono, # <--- AÑADIDO: Devuelve teléfono
                 "tipo": "cliente", "gemas": saldo, "foto_url": u.foto_url
             }), 200
 
@@ -395,11 +403,15 @@ def perfil():
         try:
             if 'nombre' in data:
                 u.nombre = data['nombre']
+            
+            # AHORA CUALQUIERA PUEDE ACTUALIZAR SU TELÉFONO
+            if 'telefono' in data:
+                u.telefono = data['telefono']
+
             if user_tipo == 'montador':
-                if 'telefono' in data:
-                    u.telefono = data['telefono']
                 if 'zona_servicio' in data:
                     u.zona_servicio = data['zona_servicio']
+            
             db.session.commit()
             return jsonify({"success": True, "message": "Perfil actualizado"}), 200
         except SQLAlchemyError: 

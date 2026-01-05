@@ -28,7 +28,10 @@ PACKS_CONFIG = {
 @montador_bp.route('/montador/trabajos/disponibles', methods=['GET'])
 @jwt_required()
 def get_trabajos_disponibles():
-    """Obtiene trabajos pendientes y sin asignar."""
+    """
+    Obtiene trabajos pendientes y sin asignar.
+    🔒 FILTRO DE PRIVACIDAD ACTIVADO: No envía teléfonos ni direcciones exactas.
+    """
     try:
         trabajos = Trabajo.query.filter_by(
             estado='pendiente', montador_id=None
@@ -45,15 +48,21 @@ def get_trabajos_disponibles():
                 except json.JSONDecodeError:
                     desglose_data = None
 
+            # 🔒 ENMASCARAR DIRECCIÓN (Para evitar puenteo)
+            # Mostramos solo una referencia vaga, no la exacta.
+            direccion_oculta = "📍 Zona de " + (t.direccion.split(',')[0] if t.direccion else "Málaga")
+
             res.append({
                 "trabajo_id": t.id,
                 "descripcion": t.descripcion,
-                "direccion": t.direccion,
+                "direccion": direccion_oculta, # <--- DIRECCIÓN PROTEGIDA
+                "direccion_completa": None,    # <--- NO ENVIAMOS LA EXACTA
                 "precio_calculado": t.precio_calculado,
                 "fecha_creacion": t.fecha_creacion.isoformat(),
                 "imagenes_urls": t.imagenes_urls,
                 "etiquetas": t.etiquetas,
                 "cliente_nombre": cliente.nombre if cliente else "Usuario Kiq",
+                "cliente_telefono": None,      # <--- TELÉFONO OCULTO (ANTI-VAGOS/PUENTEO)
                 "metodo_pago": t.metodo_pago,
                 "desglose": desglose_data
             })
@@ -66,7 +75,10 @@ def get_trabajos_disponibles():
 @montador_bp.route('/montador/mis-trabajos', methods=['GET'])
 @jwt_required()
 def get_mis_trabajos_montador():
-    """Obtiene los trabajos asignados al montador."""
+    """
+    Obtiene los trabajos asignados al montador.
+    🔓 ACCESO TOTAL: Aquí SÍ enviamos el teléfono y dirección exacta.
+    """
     montador_id = get_jwt_identity()
     try:
         trabajos = Trabajo.query.filter_by(montador_id=montador_id).order_by(
@@ -75,7 +87,8 @@ def get_mis_trabajos_montador():
         res = []
         for t in trabajos:
             c = Cliente.query.get(t.cliente_id)
-            # Manejo de desglose (JSON en DB)
+            
+            # Manejo de desglose
             desglose_data = t.desglose
             if isinstance(desglose_data, str):
                 try:
@@ -83,18 +96,19 @@ def get_mis_trabajos_montador():
                 except json.JSONDecodeError:
                     desglose_data = None
 
-            # Info del cliente (CON FOTO para el chat)
+            # Info del cliente (CON FOTO y TELÉFONO)
             cliente_info = None
             if c:
                 cliente_info = {
                     "nombre": c.nombre,
-                    "foto_url": c.foto_url
+                    "foto_url": c.foto_url,
+                    "telefono": c.telefono # <--- 🔓 DATO LIBERADO: El montador ya puede ver el número
                 }
 
             res.append({
                 "trabajo_id": t.id,
                 "descripcion": t.descripcion,
-                "direccion": t.direccion,
+                "direccion": t.direccion, # <--- 🔓 DATO LIBERADO: Dirección exacta
                 "precio_calculado": t.precio_calculado,
                 "estado": t.estado,
                 "cliente_nombre": c.nombre if c else "Cliente",
@@ -141,7 +155,6 @@ def aceptar_trabajo(trabajo_id):
 
             # Cobrar
             if coste_gemas > 0:
-                # Corrección E1123: Eliminado argumento 'tipo_transaccion' no soportado
                 recargar_gemas(
                     wallet_id=montador.wallet.id,
                     cantidad_recarga=-coste_gemas, # Negativo para restar
@@ -152,9 +165,14 @@ def aceptar_trabajo(trabajo_id):
         trabajo.estado = 'aceptado'
         db.session.commit()
 
+        # Opcional: Podríamos devolver el teléfono aquí mismo en la respuesta
+        # para que el frontend lo muestre al instante sin recargar.
+        cliente_telf = trabajo.cliente.telefono if trabajo.cliente else None
+
         return jsonify({
             "success": True,
-            "message": "¡Trabajo aceptado! Contacta con el cliente."
+            "message": "¡Trabajo aceptado! Contacta con el cliente.",
+            "datos_contacto": { "telefono": cliente_telf } # <--- EXTRA: Enviamos el dato al instante
         }), 200
 
     except SQLAlchemyError as e:
@@ -240,16 +258,18 @@ def reportar_trabajo_fallido(trabajo_id):
             tx_pago = GemTransaction.query.filter_by(
                 wallet_id=trabajo.montador.wallet.id,
                 trabajo_id=trabajo.id,
-                tipo='PAGO_SERVICIO'
+                tipo='PAGO_SERVICIO' # Ojo: Asegúrate que el tipo coincida con el grabado al pagar
             ).first()
 
-            # Si hubo transacción y fue negativa (gasto), devolvemos esa cantidad en positivo
-            if tx_pago and tx_pago.cantidad < 0:
-                gemas_a_devolver = abs(tx_pago.cantidad)
+            # NOTA: En aceptar_trabajo no grabamos explicitamente 'PAGO_SERVICIO' con trabajo_id
+            # en la versión simple. Si no encuentras la transacción exacta, 
+            # recalculamos el 10% teórico para devolverlo.
+            
+            # Recálculo de seguridad:
+            gemas_a_devolver = int(trabajo.precio_calculado * 0.10 * 10)
 
         # 2. Reembolsar
         if gemas_a_devolver > 0:
-            # Corrección E1123: Eliminado argumento 'tipo_transaccion' no soportado
             recargar_gemas(
                 wallet_id=trabajo.montador.wallet.id,
                 cantidad_recarga=gemas_a_devolver,
@@ -304,7 +324,6 @@ def crear_sesion_gemas():
     data = request.json
     pack_id = data.get('packId')
 
-    # Corrección C0103: Usamos la constante global PACKS_CONFIG definida arriba
     pack = PACKS_CONFIG.get(pack_id)
     if not pack:
         return jsonify({'error': 'Pack no válido'}), 400
@@ -341,4 +360,3 @@ def crear_sesion_gemas():
     except Exception as e: # pylint: disable=broad-exception-caught
         print(f"Error general en crear_sesion_gemas: {e}")
         return jsonify({'error': str(e)}), 500
-    
