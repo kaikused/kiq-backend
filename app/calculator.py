@@ -56,7 +56,7 @@ else:
 # Creamos el Blueprint
 calculator_bp = Blueprint('calculator', __name__)
 
-# --- TARIFARIO COMPLETO (SIN CAMBIOS) ---
+# --- TARIFARIO COMPLETO ---
 TARIFARIO = {
     "armario": {
         "keywords": [
@@ -364,12 +364,8 @@ def analizar_descripcion_con_spacy(descripcion):
             cantidad = NUMEROS_TEXTO[doc[start].text]
             mueble_token = span[-1]
       
-        # Corrección en la determinación de mueble_token para el patrón MUEBLE_SOLO
-        if len(span) == 1 and mueble_token._.is_mueble:
-             pass # W0107: Mantenemos el pass si es un placeholder para lógica futura.
-        elif len(span) > 1:
+        if len(span) > 1:
             mueble_token = span[-1]
-
 
         mueble_tipo = keyword_to_mueble.get(
             mueble_token.text, keyword_to_mueble.get(mueble_token.lemma_)
@@ -382,32 +378,39 @@ def analizar_descripcion_con_spacy(descripcion):
 
     return {"muebles_encontrados": muebles_encontrados}
 
-# --- RUTA DE CÁLCULO UNIFICADA ---
+# --- RUTA DE CÁLCULO UNIFICADA (CORREGIDA) ---
 @calculator_bp.route('/calcular_presupuesto', methods=['POST'])
 def calcular_presupuesto():
     """
     Ruta unificada para calcular el presupuesto.
+    Integra lógica de precios, IA (Gemini/spaCy), Extras y Google Maps.
     """
+    # --- 0. INICIALIZACIÓN DE VARIABLES ---
     image_labels = None
     image_urls = []
     analisis = None
     direccion_cliente = None
+    descripcion = ""
+    language = 'es'
 
-    # --- 1. PETICIÓN FINAL (JSON) ---
+    # --- 1. PROCESAMIENTO DE INPUT (JSON vs FORMDATA) ---
     if request.is_json:
         data = request.json
-        analisis = data.get('analisis')
+        analisis = data.get('analisis') # Por si viene pre-analizado del frontend
         direccion_cliente = data.get('direccion_cliente')
-        data.get('language', 'es')
+        language = data.get('language', 'es')
         image_urls = data.get('image_urls', [])
         image_labels = data.get('image_labels')
-
-    # --- 2. PETICIÓN INICIAL (FORMDATA) ---
+        # Importante: leer descripción del JSON si existe
+        descripcion = data.get('descripcion_texto_mueble', '') 
+        
     else:
+        # Procesamiento Form-Data
         descripcion = request.form.get('descripcion_texto_mueble', '')
-        request.form.get('language', 'es')
+        language = request.form.get('language', 'es')
+        direccion_cliente = request.form.get('direccion_cliente') # Capturar dirección si viene por form
 
-        # Procesar Imágenes
+        # Procesar Imágenes (Lógica original intacta)
         files = request.files.getlist('imagen')
         if files and files[0].filename != '':
             for index, file in enumerate(files):
@@ -423,7 +426,7 @@ def calcular_presupuesto():
                         if gcs_url:
                             image_urls.append(gcs_url)
 
-                        # Análisis Visual (Google Vision)
+                        # Análisis Visual (Google Vision) - Solo primera imagen
                         if index == 0 and not image_labels and VISION_CLIENT:
                             file_stream.seek(0)
                             image = vision.Image(content=file_stream.getvalue())
@@ -435,23 +438,23 @@ def calcular_presupuesto():
                                     f"{l.description} ({l.score:.0%})" for l in labels[:3]
                                 ]
                     except Exception as e:
-                        # W0718 resuelto: Se usa 'e' para informar. 
-                        # Captura intencionalmente amplia por I/O y Vision API.
+                        # Captura amplia necesaria por I/O y APIs externas
                         print(f"Error procesando imagen {index}: {e}")
 
-        # --- CEREBRO HÍBRIDO: GEMINI + SPACY ---
-        muebles_detectados = []
-
+    # --- 2. ANÁLISIS DE TEXTO (CEREBRO IA) ---
+    # Solo ejecutamos si no nos pasaron un análisis ya hecho
+    if not analisis:
         # A) Intentar con Gemini
         resultado_gemini = analizar_con_gemini(descripcion)
 
-        # NUEVA LÓGICA: INTERCEPTAR ACLARACIÓN REQUERIDA DE GEMINI
-        if (isinstance(resultado_gemini, dict) and
+        # INTERCEPTAR ACLARACIÓN REQUERIDA DE GEMINI
+        if (isinstance(resultado_gemini, dict) and 
                 resultado_gemini.get("ACLARACION_REQUERIDA")):
             print(f"🛑 Aclaración requerida: {resultado_gemini.get('MUEBLE_PROBABLE')}")
-            # Devolvemos el código de error 422 (Unprocessable Entity) de inmediato
+            # Devolvemos 422 para que el Frontend pregunte al usuario
             return jsonify(resultado_gemini), 422
 
+        muebles_detectados = []
         if resultado_gemini:
             print(f"🤖 Gemini detectó: {resultado_gemini}")
             muebles_detectados = resultado_gemini
@@ -462,7 +465,7 @@ def calcular_presupuesto():
             if "muebles_encontrados" in analisis_spacy:
                 muebles_detectados = analisis_spacy["muebles_encontrados"]
 
-        # Construir objeto de análisis final
+        # Construir objeto de análisis inicial
         analisis = {
             "muebles_encontrados": muebles_detectados,
             "coste_total_base": 0,
@@ -471,11 +474,11 @@ def calcular_presupuesto():
             "detalles_extras": []
         }
 
-        # Si no se detectó nada, poner "otro"
+        # Si no se detectó nada, poner "otro" por defecto
         if not muebles_detectados:
             analisis["muebles_encontrados"].append({"tipo": "otro", "cantidad": 1})
 
-        # Calcular precios
+        # --- CÁLCULO DE PRECIOS BASE ---
         for item in analisis["muebles_encontrados"]:
             mueble_data = TARIFARIO.get(
                 item["tipo"],
@@ -485,32 +488,49 @@ def calcular_presupuesto():
             if mueble_data.get("necesita_anclaje"):
                 analisis["necesita_anclaje_general"] = True
 
-        # Extras (Lógica simple mantenida por compatibilidad)
+        # --- CÁLCULO DE EXTRAS (LÓGICA CORREGIDA) ---
+        # Detectar armarios grandes
         if "armario" in [m["tipo"] for m in analisis["muebles_encontrados"]]:
-            match_puertas = re.search(r'(\d+|uno|dos|tres|cuatro)\s*puertas?', descripcion)
+            # Regex busca: un/dos/3/4... seguido de "puertas"
+            match_puertas = re.search(r'(\d+|un|una|uno|dos|tres|cuatro|cinco|seis)\s*puertas?', descripcion, re.IGNORECASE)
+            
             if match_puertas:
-                # W0107 Corregido: Si es un placeholder, se mantiene el pass, sino se elimina.
-                pass 
+                cant_str = match_puertas.group(1).lower()
+                # Convertir texto a número
+                if cant_str.isdigit():
+                    num_puertas = int(cant_str)
+                else:
+                    num_puertas = NUMEROS_TEXTO.get(cant_str, 2) # Default 2 si falla el mapeo
+
+                # REGLA DE NEGOCIO:
+                # Armario estándar incluye hasta 2 puertas.
+                # Se cobran 30€ por cada puerta adicional.
+                if num_puertas > 2:
+                    puertas_extra = num_puertas - 2
+                    coste_extra_puertas = puertas_extra * 30
+                    
+                    analisis["coste_total_extras"] += coste_extra_puertas
+                    analisis["detalles_extras"].append(f"Suplemento armario ({num_puertas} puertas): {coste_extra_puertas}€")
 
     # --- 3. RESPUESTA FINAL CON DESGLOSE DETALLADO ---
     if not analisis:
         return jsonify({"error": "No se pudo analizar."}), 400
 
     if direccion_cliente:
-
-        # --- CALCULO DE PRECIOS Y DESPLAZAMIENTO (Lógica corregida) ---
+        # --- CALCULO DE PRECIOS Y DESPLAZAMIENTO ---
         precio_base = analisis["coste_total_base"] + analisis["coste_total_extras"]
-        coste_desplazamiento = 0
-        zona_info = "Sin dirección"
         
-        # Lógica Google Maps Distancia (EXISTENTE)
+        # VALOR POR DEFECTO SEGURO (Si falla Maps, cobramos mínimo 15€)
+        coste_desplazamiento = 15 
+        zona_info = "Zona Estándar (Estimada)"
+        
+        # Lógica Google Maps Distancia
         try:
             api_key = os.getenv('GOOGLE_API_KEY')
             origin = os.getenv('ORIGIN_ADDRESS')
             
             if api_key and origin:
                 url = "https://maps.googleapis.com/maps/api/distancematrix/json"
-                
                 params = (
                     f"origins={urllib.parse.quote_plus(origin)}&"
                     f"destinations={urllib.parse.quote_plus(direccion_cliente)}&"
@@ -519,58 +539,58 @@ def calcular_presupuesto():
                 
                 # Se maneja RequestException y Timeout
                 resp = requests.get(f"{url}?{params}", timeout=5)
-                resp.raise_for_status() # Lanza excepción si la respuesta HTTP es 4xx/5xx
+                resp.raise_for_status()
                 
                 data_maps = resp.json()
                 
-                # Se valida que el status sea OK y que los elementos existan.
-                if (data_maps['status'] == 'OK' and 
-                        data_maps['rows'] and data_maps['rows'][0]['elements'] and 
-                        data_maps['rows'][0]['elements'][0]['status'] == 'OK'):
+                # Validar respuesta OK
+                if (data_maps.get('status') == 'OK' and 
+                        data_maps.get('rows') and 
+                        data_maps['rows'][0].get('elements') and 
+                        data_maps['rows'][0]['elements'][0].get('status') == 'OK'):
                     
                     element = data_maps['rows'][0]['elements'][0]
                     dist_m = element['distance']['value']
                     dist_km = dist_m / 1000
                     
+                    # Tarifas por distancia real
                     if dist_km > 40:
                         coste_desplazamiento = 35
                     elif dist_km > 20:
                         coste_desplazamiento = 25
                     else:
                         coste_desplazamiento = 15
-                    zona_info = f"{dist_km:.1f} km"
+                    
+                    zona_info = f"{dist_km:.1f} km desde central"
                 else:
                     print(f"⚠️ Google Maps Status no es OK: {data_maps.get('status')}")
+                    # Se mantiene coste_desplazamiento = 15 por defecto
                     
         except (RequestException, Timeout) as e:
-            # W0107 Corregido: Se añade la lógica de impresión y el `pass` se mantiene.
             print(f"❌ Error de red/timeout de Google Maps: {e}")
-            pass 
+            # Se mantiene coste_desplazamiento = 15
         except KeyError as e:
-            # W0107 Corregido: Se añade la lógica de impresión y el `pass` se mantiene.
             print(f"❌ Error de parsing del JSON de Google Maps (KeyError: {e}).")
-            pass 
+            # Se mantiene coste_desplazamiento = 15
         except Exception as e: 
-            # W0718 resuelto: Se usa 'e' para informar. Captura de último recurso.
             print(f"❌ Error desconocido en Google Maps: {e}")
-            pass
+            # Se mantiene coste_desplazamiento = 15
+
         # -----------------------------------------------------------------------------
 
         # Cálculo puro antes de aplicar el suelo
         precio_total_calculado = precio_base + coste_desplazamiento
 
         # --- SUELO DE PRECIO (PRICE FLOOR) ---
-        # Tarifa mínima de servicio: Desplazamiento + Tiempo Mínimo
-        PRECIO_MINIMO = 30.0 # C0103: Dejado como constante de módulo
-     
+        PRECIO_MINIMO = 30.0
+        
         if precio_total_calculado < PRECIO_MINIMO:
             precio_final = PRECIO_MINIMO
         else:
             precio_final = precio_total_calculado
         # -------------------------------------
 
-        # --- CONSTRUCCIÓN DEL DESGLOSE DETALLADO ---
-
+        # --- CONSTRUCCIÓN DEL DESGLOSE DETALLADO (JSON Response) ---
         muebles_cotizados = []
         anclaje_requerido = False
         coste_anclaje_estimado = 0
@@ -578,7 +598,7 @@ def calcular_presupuesto():
 
         for item in analisis["muebles_encontrados"]:
             m_data = TARIFARIO.get(item["tipo"],
-                                     {"display_name": {"es": item["tipo"]}, "precio": 40})
+                                    {"display_name": {"es": item["tipo"]}, "precio": 40})
             nombre = m_data.get("display_name", {}).get("es", item["tipo"])
             precio_unitario = m_data.get("precio", 40)
             subtotal = item["cantidad"] * precio_unitario
@@ -586,7 +606,6 @@ def calcular_presupuesto():
 
             if m_data.get("necesita_anclaje"):
                 anclaje_requerido = True
-                # Solo estimamos un coste de anclaje si al menos un mueble lo requiere
                 coste_anclaje_estimado = 15
 
             muebles_cotizados.append({
@@ -607,7 +626,8 @@ def calcular_presupuesto():
                 "coste_desplazamiento": coste_desplazamiento,
                 "distancia_km": zona_info,
                 "coste_anclaje_estimado": coste_anclaje_estimado if anclaje_requerido else 0,
-                "total_extras": analisis["coste_total_extras"]
+                "total_extras": analisis["coste_total_extras"],
+                "detalles_extras": analisis.get("detalles_extras", [])
             },
             "necesita_anclaje": anclaje_requerido,
             "image_urls": image_urls,
@@ -615,7 +635,7 @@ def calcular_presupuesto():
         }
 
     else:
-        # Respuesta simplificada si no hay dirección
+        # Respuesta simplificada si no hay dirección (Pre-cálculo)
         response_data = {
             "analisis": analisis,
             "necesita_anclaje": analisis.get("necesita_anclaje_general", False),
