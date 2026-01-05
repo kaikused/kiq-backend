@@ -9,6 +9,10 @@ import stripe
 from .extensions import db, cors, jwt, migrate
 
 # Importamos las rutas
+# --- AÑADIMOS ESTO (EL CALCULADOR NUEVO) ---
+from .calculator import calculator_bp 
+# -------------------------------------------
+
 from .routes.auth_routes import auth_bp
 from .routes.cliente_routes import cliente_bp
 from .routes.montador_routes import montador_bp
@@ -53,6 +57,11 @@ def create_app():
     migrate.init_app(app, db)
 
     # Registro de Rutas
+    
+    # --- REGISTRAMOS EL CALCULADOR NUEVO (PRIORIDAD) ---
+    app.register_blueprint(calculator_bp) 
+    # ---------------------------------------------------
+
     app.register_blueprint(public_bp)
 
     app.register_blueprint(auth_bp, url_prefix='/api')
