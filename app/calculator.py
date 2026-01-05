@@ -16,6 +16,7 @@ import requests
 from requests.exceptions import RequestException, Timeout
 from dotenv import load_dotenv
 
+# Asumimos que estos módulos existen en tu proyecto
 from .storage import upload_image_to_gcs
 from .nlp_engine import get_nlp_model
 
@@ -264,18 +265,35 @@ def calcular_presupuesto():
     image_labels = None
     descripcion = ""
     direccion_cliente = None
+    analisis_previo = None
 
     if request.is_json:
+        # CASO 2: Cuando se envía la dirección o una confirmación
         data = request.json
         descripcion = data.get('descripcion_texto_mueble', '')
         direccion_cliente = data.get('direccion_cliente')
-        analisis_previo = data.get('analisis_confirmado')
+        # El frontend envía 'analisis', aquí lo capturamos
+        analisis_raw = data.get('analisis')
+        # Si 'analisis' viene con la estructura {necesita_anclaje:..., items: [...]}, extraemos items
+        if analisis_raw and isinstance(analisis_raw, dict) and 'items' in analisis_raw:
+             analisis_previo = analisis_raw['items']
+        elif analisis_raw:
+             analisis_previo = analisis_raw
+        
+        # Recuperar URLs si vienen en el JSON para no perderlas
+        if data.get('image_urls'):
+            image_urls = data.get('image_urls')
+        if data.get('image_labels'):
+            image_labels = data.get('image_labels')
+
     else:
+        # CASO 1: Primera petición con posible subida de archivos (FormData)
         descripcion = request.form.get('descripcion_texto_mueble', '')
         direccion_cliente = request.form.get('direccion_cliente')
+        # En FormData es raro enviar el objeto analisis complejo, solemos empezar de cero
         analisis_previo = None
 
-        # Procesamiento Básico de Imágenes
+        # Procesamiento de Imágenes
         files = request.files.getlist('imagen')
         if files and files[0].filename != '':
             for index, file in enumerate(files):
@@ -288,6 +306,7 @@ def calcular_presupuesto():
                         gcs_url = upload_image_to_gcs(file, folder="cotizaciones")
                         if gcs_url:
                             image_urls.append(gcs_url)
+                        
                         if index == 0 and VISION_CLIENT:
                             file_stream.seek(0)
                             image = vision.Image(content=file_stream.getvalue())
@@ -303,16 +322,17 @@ def calcular_presupuesto():
     muebles_procesados = []
 
     if analisis_previo:
+        # Si ya tenemos el análisis aprobado, lo usamos
         muebles_procesados = analisis_previo
     else:
-        # Si es la primera vez, preguntamos a Gemini Estricto
+        # Si es nuevo, analizamos con IA
         resultados = analizar_con_gemini_estricto(descripcion)
 
         if not resultados:
-            # Fallback Inteligente si Gemini muere
+            # Fallback a spaCy
             resultados = analizar_con_spacy_basico(descripcion)
 
-        # --- FILTRO ANTI-VAGOS ---
+        # --- FILTRO ANTI-VAGOS (CORREGIDO) ---
         preguntas_necesarias = []
         for item in resultados:
             if item.get("falta_info"):
@@ -322,17 +342,17 @@ def calcular_presupuesto():
                 })
 
         if preguntas_necesarias:
+            # DEVOLVEMOS 422 PARA QUE EL FRONTEND DISPARE LA PREGUNTA
             return jsonify({
-                "status": "ask_user",
-                "mensaje": "Para darte un precio exacto, necesitamos un detalle más.",
-                "preguntas": preguntas_necesarias,
-                "analisis_temporal": resultados
-            })
+                "ACLARACION_REQUERIDA": True,
+                "MUEBLE_PROBABLE": preguntas_necesarias[0]["tipo_mueble"],
+                "mensaje": "Se requiere aclaración de cantidad o detalles."
+            }), 422
 
         muebles_procesados = resultados
 
     # 3. CÁLCULO DE PRECIO
-    coste_muebles_base = 0 # Variable unificada
+    coste_muebles_base = 0 
     coste_extras = 0
     detalles_factura = []
     anclaje_global = False
@@ -340,7 +360,7 @@ def calcular_presupuesto():
 
     for item in muebles_procesados:
         tipo = item.get("tipo", "otro")
-        cantidad = item.get("cantidad", 1)
+        cantidad = int(item.get("cantidad", 1))
         attrs = item.get("atributos", {})
 
         tarifas = TARIFARIO.get(tipo, {"precio_base": 40, "necesita_anclaje": False})
@@ -422,9 +442,15 @@ def calcular_presupuesto():
     total = coste_muebles_base + coste_extras + coste_desplazamiento + coste_anclaje
     precio_final = max(total, PRECIO_MINIMO)
 
+    # Construimos la respuesta EXACTAMENTE como la espera el Frontend
     return jsonify({
         "status": "success",
         "total_presupuesto": precio_final,
+        # ESTE OBJETO 'analisis' ES CRUCIAL PARA EL FRONTEND
+        "analisis": {
+            "necesita_anclaje_general": anclaje_global,
+            "items": muebles_procesados # Guardamos los items procesados
+        },
         "desglose": {
             "muebles_cotizados": muebles_cotizados,
             "coste_muebles_base": coste_muebles_base,
