@@ -1,6 +1,6 @@
 """
 Módulo de calculadora de presupuestos para Kiq Montajes.
-Versión PRO: Anti-Ambigüedad (Anti-Vagos).
+Versión PRO: Anti-Ambigüedad (Anti-Vagos) + Detección de Saludos.
 Integra lógica de precios dinámica, IA Estricta (Gemini/spaCy) y Google Maps.
 """
 import os
@@ -129,11 +129,10 @@ NUMEROS_TEXTO = {
     "seven": 7, "eight": 8, "nine": 9, "ten": 10
 }
 
-# --- CEREBRO IA ESTRICTO ---
+# --- CEREBRO IA ESTRICTO (ACTUALIZADO) ---
 def analizar_con_gemini_estricto(texto_usuario):
     """
-    Usa Gemini para extraer datos estructurados.
-    Si falta información crítica, marca 'falta_info'.
+    Usa Gemini para extraer datos estructurados O detectar saludos.
     """
     try:
         if not GEMINI_API_KEY:
@@ -145,16 +144,14 @@ def analizar_con_gemini_estricto(texto_usuario):
 Especialista: Eres un experto cotizador de muebles. Analiza el texto del cliente.
 CATÁLOGO: {keys_muebles}
 
-TUS REGLAS DE ORO (Validación Estricta):
-1. ARMARIOS:
-   - ¿Dice el tipo de puerta? (Busca: "corredera", "deslizante", "batiente", "bisagra").
-   - ¿Dice la cantidad? (Busca números o "2 puertas", "3 puertas").
-   - Si falta algo, añádelo a la lista 'falta_info': ["tipo_puerta"] o ["num_puertas"].
-   - Si no dice nada, asume NADA. No inventes.
+TUS OBJETIVOS:
+1. Si el usuario SOLO saluda (ej: "hola", "buenos dias", "hey", "buenas", "que tal") y NO menciona muebles:
+   Devuelve: [{{ "tipo": "saludo", "cantidad": 0 }}]
 
-2. CANAPÉS / CAMAS:
-   - ¿Dice la medida? (90, 105, 135, 150, 160, 180, "matrimonio", "individual", "king").
-   - Si falta, añade a 'falta_info': ["medida"].
+2. Si menciona muebles, extrae los datos (Validación Estricta):
+   - ARMARIOS: ¿Tipo puerta? (corredera/batiente). ¿Cantidad puertas?
+   - CAMAS/CANAPÉS: ¿Medida? (90, 135, 150...).
+   - Si falta info, usa "falta_info": ["tipo_puerta"] o ["num_puertas"].
 
 ESTRUCTURA DE RESPUESTA JSON (Lista de objetos):
 [
@@ -290,7 +287,6 @@ def calcular_presupuesto():
         # CASO 1: Primera petición con posible subida de archivos (FormData)
         descripcion = request.form.get('descripcion_texto_mueble', '')
         direccion_cliente = request.form.get('direccion_cliente')
-        # En FormData es raro enviar el objeto analisis complejo, solemos empezar de cero
         analisis_previo = None
 
         # Procesamiento de Imágenes
@@ -332,7 +328,25 @@ def calcular_presupuesto():
             # Fallback a spaCy
             resultados = analizar_con_spacy_basico(descripcion)
 
-        # --- FILTRO ANTI-VAGOS (CORREGIDO) ---
+        # --- VALIDACIÓN DE BASURA O SALUDOS (NUEVO) ---
+        if not resultados:
+            # Si no hay nada ni con IA ni spaCy -> Es basura ("asdf", "hola123")
+            return jsonify({
+                "ACLARACION_REQUERIDA": True,
+                "MUEBLE_PROBABLE": "desconocido",
+                "mensaje": "No entiendo qué mueble es."
+            }), 422
+        
+        # Si Gemini dice que es un saludo puro ("Hola", "Buenos días")
+        if len(resultados) == 1 and resultados[0].get("tipo") == "saludo":
+            return jsonify({
+                "ACLARACION_REQUERIDA": True,
+                "MUEBLE_PROBABLE": "saludo",
+                "mensaje": "Saludo detectado."
+            }), 422
+        # ---------------------------------------------
+
+        # --- FILTRO ANTI-VAGOS ---
         preguntas_necesarias = []
         for item in resultados:
             if item.get("falta_info"):
