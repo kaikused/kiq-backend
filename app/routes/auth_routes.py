@@ -1,496 +1,437 @@
 """
-Rutas de autenticación, registro y GESTIÓN DE PERFIL.
-Incluye envío de códigos, login universal, perfil de usuario, fotos y bonos.
+Rutas de autenticación y registro para la aplicación.
+Maneja login, registro, envío de códigos y recuperación de contraseña.
 """
-import stripe
+import random
+import uuid
+import os
+from datetime import datetime, timedelta
+# pylint: disable=no-name-in-module
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, create_access_token, get_jwt_identity, get_jwt
-from sqlalchemy.exc import SQLAlchemyError
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from werkzeug.security import generate_password_hash, check_password_hash
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
+from app import db
+from app.models import Usuario, Presupuesto
 
-# Imports absolutos desde 'app'
-from app.models import Cliente, Montador, VerificationCode, Trabajo, GemTransaction
-from app.extensions import db
-from app.gems_service import obtener_o_crear_wallet, asignar_bono_bienvenida
-from app.email_service import enviar_codigo_verificacion, enviar_resumen_presupuesto
-from app.storage import upload_image_to_gcs
-
-# Definimos el Blueprint
 auth_bp = Blueprint('auth', __name__)
 
-# --- RUTAS DE AUTENTICACIÓN ---
+# --- CONFIGURACIÓN EMAIL ---
+SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
+SENDER_EMAIL = os.getenv('SENDER_EMAIL')
 
-@auth_bp.route('/auth/send-code', methods=['POST'])
+# --- ALMACÉN TEMPORAL DE CÓDIGOS (En producción usar Redis) ---
+verification_codes = {}
+
+
+def send_email(to_email, subject, content):
+    """
+    Envía un correo electrónico usando SendGrid.
+    """
+    if not SENDGRID_API_KEY or not SENDER_EMAIL:
+        print("⚠️ SendGrid no configurado.")
+        return False
+
+    message = Mail(
+        from_email=SENDER_EMAIL,
+        to_emails=to_email,
+        subject=subject,
+        html_content=content
+    )
+    try:
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        response = sg.send(message)
+        print(f"📧 Email enviado a {to_email}: {response.status_code}")
+        return True
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        print(f"❌ Error enviando email: {e}")
+        return False
+
+
+@auth_bp.route('/api/auth/send-code', methods=['POST'])
 def send_verification_code():
-    """Genera y envía un código OTP al email."""
-    email = request.json.get('email')
+    """
+    Genera y envía un código de verificación de 6 dígitos al email.
+    """
+    data = request.json
+    email = data.get('email')
+
     if not email:
         return jsonify({"error": "Email requerido"}), 400
 
-    if Cliente.query.filter_by(email=email).first():
-        return jsonify({
-            "status": "registrado",
-            "message": "Este email ya tiene cuenta de Cliente."
-        })
+    code = str(random.randint(100000, 999999))
+    verification_codes[email] = {
+        "code": code,
+        "expires_at": datetime.utcnow() + timedelta(minutes=10)
+    }
 
-    if Montador.query.filter_by(email=email).first():
-        return jsonify({
-            "status": "registrado",
-            "message": "Este email ya tiene cuenta de Montador."
-        })
+    content = f"""
+    <h2>Tu código de verificación KIQ</h2>
+    <p>Usa este código para verificar tu cuenta:</p>
+    <h1 style="color: #4F46E5; letter-spacing: 5px;">{code}</h1>
+    <p>Este código expira en 10 minutos.</p>
+    """
 
-    try:
-        old_codes = VerificationCode.query.filter_by(email=email).all()
-        for c in old_codes:
-            db.session.delete(c)
+    if send_email(email, "Código de Verificación - KIQ", content):
+        return jsonify({"message": "Código enviado"}), 200
 
-        code = VerificationCode.generate_code()
-        new_verification = VerificationCode(email=email, code=code)
-        db.session.add(new_verification)
-        db.session.commit()
-
-        if enviar_codigo_verificacion(email, code):
-            return jsonify({"status": "enviado", "message": "Código enviado"})
-
-        print("⚠️ Fallo al enviar email. Revirtiendo creación de código.")
-        db.session.rollback()
-        return jsonify({"error": "No se pudo enviar el email."}), 500
-
-    except SQLAlchemyError as e:
-        db.session.rollback()
-        print(f"Error de BD: {e}")
-        return jsonify({"error": "Error interno de base de datos."}), 500
-    except Exception as e: # pylint: disable=broad-exception-caught
-        print(f"Error general: {e}")
-        return jsonify({"error": "Error interno del servidor."}), 500
+    # Fallback para desarrollo si no hay email configurado
+    print(f"⚠️ MODO DEV: El código para {email} es {code}")
+    return jsonify({"message": "Código enviado (Simulado en logs)"}), 200
 
 
-@auth_bp.route('/check-email', methods=['POST'])
+@auth_bp.route('/api/check-email', methods=['POST'])
 def check_email():
-    """Verifica si el email existe en alguna tabla."""
+    """
+    Verifica si un email ya existe en la base de datos.
+    """
     data = request.json
     email = data.get('email')
+
     if not email:
-        return jsonify({"error": "Email no proporcionado"}), 400
+        return jsonify({"error": "Email requerido"}), 400
 
-    if (Cliente.query.filter_by(email=email).first() or
-            Montador.query.filter_by(email=email).first()):
-        return jsonify({"status": "existente"})
-    return jsonify({"status": "nuevo"})
+    usuario = Usuario.query.filter_by(email=email).first()
 
+    if usuario:
+        return jsonify({"status": "existente", "mensaje": "Email ya registrado"}), 200
 
-@auth_bp.route('/login-universal', methods=['POST'])
-def login_universal():
-    """Login unificado para ambos tipos de usuario."""
-    data = request.json
-    email = data.get('email')
-    password = data.get('password')
-
-    if not all([email, password]):
-        return jsonify({"error": "Datos incompletos"}), 400
-
-    cliente = Cliente.query.filter_by(email=email).first()
-    if cliente and cliente.check_password(password):
-        token = create_access_token(
-            identity=str(cliente.id),
-            additional_claims={"tipo": "cliente"}
-        )
-        return jsonify({
-            "success": True,
-            "tipo_usuario": "cliente",
-            "access_token": token
-        })
-
-    montador = Montador.query.filter_by(email=email).first()
-    if montador and montador.check_password(password):
-        token = create_access_token(
-            identity=str(montador.id),
-            additional_claims={"tipo": "montador"}
-        )
-        return jsonify({
-            "success": True,
-            "tipo_usuario": "montador",
-            "access_token": token
-        })
-
-    return jsonify({"error": "Credenciales incorrectas"}), 401
+    return jsonify({"status": "nuevo", "mensaje": "Email disponible"}), 200
 
 
-@auth_bp.route('/montador/registro', methods=['POST'])
-def registro_montador():
-    """Registra un nuevo montador con Stripe."""
-    data = request.json
-    email = data.get('email')
-
-    codigo_verificacion = data.get('codigo')
-    verification = VerificationCode.query.filter_by(
-        email=email, code=codigo_verificacion
-    ).first()
-    if not verification or not verification.is_valid():
-        return jsonify({"error": "Código inválido o expirado"}), 400
-    db.session.delete(verification)
-
-    if Montador.query.filter_by(email=data.get('email')).first():
-        return jsonify({"error": "Email registrado"}), 400
-
-    try:
-        account = stripe.Account.create(
-            type="standard",
-            email=data.get('email'),
-            capabilities={"card_payments": {"requested": True}, "transfers": {"requested": True}},
-            business_type='individual',
-            country='ES'
-        )
-
-        nuevo = Montador(
-            nombre=data.get('nombre'), email=data.get('email'),
-            telefono=data.get('telefono'), zona_servicio=data.get('zona_servicio'),
-            stripe_account_id=account.id
-        )
-        nuevo.set_password(data.get('password'))
-        db.session.add(nuevo)
-        db.session.commit()
-
-        obtener_o_crear_wallet(nuevo.id, 'montador')
-        asignar_bono_bienvenida(nuevo.id, 'montador')
-
-        token = create_access_token(
-            identity=str(nuevo.id),
-            additional_claims={"tipo": "montador"}
-        )
-        return jsonify({"success": True, "access_token": token}), 201
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
-
-
-@auth_bp.route('/registro-cliente-simple', methods=['POST'])
-def registro_cliente_simple():
+@auth_bp.route('/api/publicar-y-registrar', methods=['POST'])
+def publicar_y_registrar():
     """
-    Registra un cliente SOLO con datos básicos (Nombre, Email, Pass, Código).
-    Se usa cuando el usuario viene del Outlet y no quiere pedir un montaje aún.
+    Registra un usuario nuevo Y guarda su primer presupuesto en un solo paso.
+    Incluye campo teléfono/móvil.
     """
     data = request.json
-    nombre = data.get('nombre')
-    email = data.get('email')
-    password = data.get('password')
-    codigo = data.get('codigo')
-
-    # 1. Validación
-    if not all([nombre, email, password, codigo]):
-        return jsonify({"error": "Faltan datos obligatorios"}), 400
-
-    # 2. Verificar Código
-    verification = VerificationCode.query.filter_by(email=email, code=codigo).first()
-    if not verification or not verification.is_valid():
-        return jsonify({"error": "Código inválido o expirado"}), 400
-    db.session.delete(verification)
-
-    # 3. Verificar Existencia
-    if Cliente.query.filter_by(email=email).first():
-        return jsonify({"error": "Email ya registrado"}), 400
-
     try:
-        # 4. Crear Cliente (Sin trabajo asociado)
-        nuevo_cliente = Cliente(nombre=nombre, email=email)
-        nuevo_cliente.set_password(password)
-        
-        db.session.add(nuevo_cliente)
+        # 1. Datos del Usuario
+        email = data.get('email')
+        password = data.get('password')
+        nombre = data.get('nombre', 'Cliente')
+        telefono = data.get('telefono', '')  # <--- AQUI CAPTURAMOS EL MÓVIL
+
+        # 2. Datos del Presupuesto
+        descripcion = data.get('descripcion')
+        direccion = data.get('direccion')
+        precio = data.get('precio_calculado')
+        imagenes = data.get('imagenes', [])
+        etiquetas = data.get('etiquetas', [])
+        desglose = data.get('desglose', {})
+
+        if not email or not password:
+            return jsonify({"error": "Email y contraseña requeridos"}), 400
+
+        # Verificar si ya existe
+        if Usuario.query.filter_by(email=email).first():
+            return jsonify({"error": "El usuario ya existe"}), 400
+
+        # Crear Usuario
+        nuevo_usuario = Usuario(
+            public_id=str(uuid.uuid4()),
+            email=email,
+            nombre=nombre,
+            password_hash=generate_password_hash(password),
+            tipo='cliente',
+            telefono=telefono,  # Guardamos el móvil
+            direccion=direccion or ''
+        )
+        db.session.add(nuevo_usuario)
+        db.session.flush()  # Para obtener el ID
+
+        # Crear Presupuesto
+        nuevo_presupuesto = Presupuesto(
+            usuario_id=nuevo_usuario.id,
+            titulo=f"Montaje: {descripcion[:30]}..." if descripcion else "Nuevo Montaje",
+            descripcion=descripcion,
+            precio_estimado=precio,
+            estado='pendiente_revision',
+            ubicacion=direccion,
+            imagenes=imagenes,
+            etiquetas=etiquetas,
+            desglose_json=desglose
+        )
+        db.session.add(nuevo_presupuesto)
         db.session.commit()
 
-        # 5. Inicializar Wallet y Bono
-        obtener_o_crear_wallet(nuevo_cliente.id, 'cliente')
-        asignar_bono_bienvenida(nuevo_cliente.id, 'cliente')
+        # Generar Token
+        access_token = create_access_token(identity=nuevo_usuario.public_id)
 
-        # 6. Generar Token
-        token = create_access_token(
-            identity=str(nuevo_cliente.id),
-            additional_claims={"tipo": "cliente"}
+        # Enviar email de bienvenida
+        send_email(
+            email,
+            "¡Bienvenido a KIQ Montajes!",
+            f"<h1>Hola {nombre}</h1><p>Tu cuenta ha sido creada y tu presupuesto guardado.</p>"
         )
 
         return jsonify({
-            "success": True,
-            "message": "¡Bienvenido a Kiq!",
-            "access_token": token,
-            "user": {
-                "id": nuevo_cliente.id,
-                "nombre": nuevo_cliente.nombre,
-                "tipo": "cliente"
+            "message": "Usuario y presupuesto creados",
+            "access_token": access_token,
+            "usuario": {
+                "nombre": nombre,
+                "email": email,
+                "telefono": telefono,
+                "public_id": nuevo_usuario.public_id
             }
         }), 201
 
-    except Exception as e: # pylint: disable=broad-exception-caught
+    except Exception as e:  # pylint: disable=broad-exception-caught
         db.session.rollback()
-        print(f"Error en registro simple: {e}")
-        return jsonify({"error": "Error interno al registrar"}), 500
+        print(f"❌ Error en publicar-y-registrar: {e}")
+        return jsonify({"error": "Error interno del servidor"}), 500
 
 
-# 👇 RUTA MODIFICADA PARA GUARDAR EL TELÉFONO 👇
-@auth_bp.route('/publicar-y-registrar', methods=['POST'])
-def publicar_y_registrar():
-    """Registra cliente y crea trabajo en un paso."""
-    data = request.json
-    nombre = data.get('nombre')
-    email = data.get('email')
-    password = data.get('password')
-    telefono = data.get('telefono') # <--- NUEVO: Recibimos teléfono del chat
-
-    try:
-        if float(data.get('precio_calculado')) < 30:
-            return jsonify({"error": "Presupuesto bajo"}), 400
-    except (TypeError, ValueError):
-        return jsonify({"error": "Precio inválido"}), 400
-
-    # --- VERIFICACIÓN DE CÓDIGO (COMENTADO PARA EL CHAT) ---
-    # Como el chat ya valida el email antes y no pide código OTP en este paso,
-    # saltamos esta verificación. Si tu flujo cambia, descomenta esto.
-    if data.get('codigo'): 
-        verification = VerificationCode.query.filter_by(
-            email=email, code=data.get('codigo')
-        ).first()
-
-        if not verification or not verification.is_valid():
-            return jsonify({"error": "Código inválido"}), 400
-        db.session.delete(verification)
-    # --------------------------------------------------------
-
-    if Cliente.query.filter_by(email=email).first():
-        return jsonify({"error": "Email registrado"}), 400
-
-    try:
-        # AQUÍ GUARDAMOS EL TELÉFONO
-        nuevo_cliente = Cliente(
-            nombre=nombre, 
-            email=email, 
-            telefono=telefono # <--- NUEVO: Pasado al modelo
-        )
-        nuevo_cliente.set_password(password)
-
-        nuevo_trabajo = Trabajo(
-            descripcion=data.get('descripcion'),
-            direccion=data.get('direccion'),
-            precio_calculado=data.get('precio_calculado'),
-            estado='cotizacion',
-            imagenes_urls=data.get('imagenes', []),
-            etiquetas=data.get('etiquetas', []),
-            desglose=data.get('desglose')
-        )
-        nuevo_trabajo.cliente = nuevo_cliente
-
-        db.session.add(nuevo_cliente)
-        db.session.add(nuevo_trabajo)
-        db.session.commit()
-
-        obtener_o_crear_wallet(nuevo_cliente.id, 'cliente')
-        asignar_bono_bienvenida(nuevo_cliente.id, 'cliente')
-
-        try:
-            enviar_resumen_presupuesto(
-                nuevo_cliente.email,
-                nuevo_cliente.nombre,
-                nuevo_trabajo.precio_calculado,
-                []
-            )
-        except Exception: # pylint: disable=broad-exception-caught
-            pass
-
-        token = create_access_token(
-            identity=str(nuevo_cliente.id),
-            additional_claims={"tipo": "cliente"}
-        )
-        return jsonify({"success": True, "access_token": token}), 201
-    except Exception as e: # pylint: disable=broad-exception-caught
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
-
-
-@auth_bp.route('/login-y-publicar', methods=['POST'])
+@auth_bp.route('/api/login-y-publicar', methods=['POST'])
 def login_y_publicar():
-    """Login y publicación de trabajo simultáneo."""
+    """
+    Loguea a un usuario existente Y guarda un nuevo presupuesto.
+    """
     data = request.json
-    email = data.get('email')
-    password = data.get('password')
-
-    cliente = Cliente.query.filter_by(email=email).first()
-    if not cliente or not cliente.check_password(password):
-        return jsonify({"error": "Credenciales incorrectas"}), 401
-
-    token = create_access_token(
-        identity=str(cliente.id),
-        additional_claims={"tipo": "cliente"}
-    )
-
     try:
-        nuevo_trabajo = Trabajo(
-            descripcion=data.get('descripcion'),
-            direccion=data.get('direccion'),
-            precio_calculado=data.get('precio_calculado'),
-            cliente_id=cliente.id,
-            estado='cotizacion',
-            imagenes_urls=data.get('imagenes', []),
-            etiquetas=data.get('etiquetas', []),
-            desglose=data.get('desglose')
+        email = data.get('email')
+        password = data.get('password')
+
+        # Datos presupuesto
+        descripcion = data.get('descripcion')
+        direccion = data.get('direccion')
+        precio = data.get('precio_calculado')
+        imagenes = data.get('imagenes', [])
+        etiquetas = data.get('etiquetas', [])
+        desglose = data.get('desglose', {})
+
+        if not email or not password:
+            return jsonify({"error": "Faltan credenciales"}), 400
+
+        usuario = Usuario.query.filter_by(email=email).first()
+
+        if not usuario or not check_password_hash(usuario.password_hash, password):
+            return jsonify({"error": "Credenciales inválidas"}), 401
+
+        # Crear Presupuesto vinculado
+        nuevo_presupuesto = Presupuesto(
+            usuario_id=usuario.id,
+            titulo=f"Montaje: {descripcion[:30]}..." if descripcion else "Nuevo Montaje",
+            descripcion=descripcion,
+            precio_estimado=precio,
+            estado='pendiente_revision',
+            ubicacion=direccion,
+            imagenes=imagenes,
+            etiquetas=etiquetas,
+            desglose_json=desglose
         )
-        db.session.add(nuevo_trabajo)
+        db.session.add(nuevo_presupuesto)
         db.session.commit()
-        return jsonify({"success": True, "access_token": token}), 201
-    except Exception as e: # pylint: disable=broad-exception-caught
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
 
-
-# ==========================================
-# 👤 RUTAS DE PERFIL
-# ==========================================
-
-@auth_bp.route('/perfil', methods=['GET', 'PUT'])
-@jwt_required()
-def perfil():
-    """Obtiene o actualiza el perfil del usuario."""
-    user_id = get_jwt_identity()
-    claims = get_jwt()
-    user_tipo = claims.get("tipo")
-
-    if request.method == 'GET':
-        if user_tipo == 'cliente':
-            u = Cliente.query.get(user_id)
-            if not u:
-                return jsonify({"error": "Usuario no encontrado"}), 404
-            saldo = u.wallet.saldo if u.wallet else 0
-            return jsonify({
-                "id": u.id, "nombre": u.nombre, "email": u.email,
-                "telefono": u.telefono, # <--- AÑADIDO: Devuelve teléfono
-                "tipo": "cliente", "gemas": saldo, "foto_url": u.foto_url
-            }), 200
-
-        if user_tipo == 'montador':
-            u = Montador.query.get(user_id)
-            if not u:
-                return jsonify({"error": "Usuario no encontrado"}), 404
-            
-            # Verificar bono bienvenida
-            bono_existe = GemTransaction.query.filter_by(
-                wallet_id=u.wallet.id, tipo='BONO_REGISTRO'
-            ).first() is not None
-
-            stripe_completado = False
-            if u.stripe_account_id:
-                try:
-                    account = stripe.Account.retrieve(u.stripe_account_id)
-                    stripe_completado = account.details_submitted
-                except Exception as e: # pylint: disable=broad-exception-caught
-                    print(f"Error verificando Stripe: {e}")
-
-            saldo = u.wallet.saldo if u.wallet else 0
-            return jsonify({
-                "id": u.id, "nombre": u.nombre, "email": u.email,
-                "telefono": u.telefono, "zona_servicio": u.zona_servicio,
-                "tipo": "montador", "stripe_account_id": u.stripe_account_id,
-                "stripe_boarding_completado": stripe_completado, 
-                "gemas": saldo, "foto_url": u.foto_url,
-                "bono_entregado": bono_existe,
-                "bono_visto": u.bono_visto
-            }), 200
-        return jsonify({"error": "Usuario no encontrado"}), 404
-
-    if request.method == 'PUT':
-        data = request.json
-        u = (
-            Cliente.query.get(user_id) if user_tipo == 'cliente'
-            else Montador.query.get(user_id)
-        )
-        if not u:
-            return jsonify({"error": "Usuario no encontrado"}), 404
-        try:
-            if 'nombre' in data:
-                u.nombre = data['nombre']
-            
-            # AHORA CUALQUIERA PUEDE ACTUALIZAR SU TELÉFONO
-            if 'telefono' in data:
-                u.telefono = data['telefono']
-
-            if user_tipo == 'montador':
-                if 'zona_servicio' in data:
-                    u.zona_servicio = data['zona_servicio']
-            
-            db.session.commit()
-            return jsonify({"success": True, "message": "Perfil actualizado"}), 200
-        except SQLAlchemyError: 
-            db.session.rollback()
-            return jsonify({"error": "Error al actualizar"}), 500
-        except Exception: # pylint: disable=broad-exception-caught
-            db.session.rollback()
-            return jsonify({"error": "Error al actualizar"}), 500
-    return jsonify({"error": "Método no permitido"}), 405
-
-
-@auth_bp.route('/perfil/foto', methods=['POST'])
-@jwt_required()
-def subir_foto_perfil():
-    """Sube una foto de perfil a GCS y actualiza la BD."""
-    user_id = get_jwt_identity()
-    claims = get_jwt()
-    tipo = claims.get("tipo")
-
-    if 'imagen' not in request.files:
-        return jsonify({"error": "No se envió ninguna imagen"}), 400
-    
-    file = request.files['imagen']
-    if file.filename == '':
-        return jsonify({"error": "Archivo vacío"}), 400
-
-    try:
-        # 1. Subir a la nube
-        url_publica = upload_image_to_gcs(file, folder="perfiles")
-        
-        if not url_publica:
-            return jsonify({"error": "Error al guardar la imagen en la nube"}), 500
-
-        # 2. Actualizar base de datos
-        usuario = (
-            Cliente.query.get(user_id) if tipo == 'cliente'
-            else Montador.query.get(user_id)
-        )
-
-        if not usuario:
-            return jsonify({"error": "Usuario no encontrado"}), 404
-
-        usuario.foto_url = url_publica 
-        db.session.commit()
+        access_token = create_access_token(identity=usuario.public_id)
 
         return jsonify({
-            "success": True, 
-            "message": "Foto actualizada correctamente", 
-            "foto_url": url_publica
+            "message": "Sesión iniciada y presupuesto guardado",
+            "access_token": access_token
         }), 200
 
-    except SQLAlchemyError as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         db.session.rollback()
-        print(f"Error de BD en subir_foto_perfil: {e}")
-        return jsonify({"error": "Error interno de base de datos."}), 500
-    except Exception as e: # pylint: disable=broad-exception-caught
-        db.session.rollback()
-        print(f"Error general en subir_foto_perfil: {e}")
-        return jsonify({"error": str(e)}), 500
+        print(f"❌ Error en login-y-publicar: {e}")
+        return jsonify({"error": "Error interno"}), 500
 
 
-@auth_bp.route('/perfil/dismiss-bono', methods=['POST'])
+@auth_bp.route('/api/auth/login', methods=['POST'])
+def login():
+    """
+    Endpoint estándar de login.
+    """
+    data = request.json
+    if not data or not data.get('email') or not data.get('password'):
+        return jsonify({'message': 'Faltan datos'}), 400
+
+    usuario = Usuario.query.filter_by(email=data['email']).first()
+
+    if not usuario:
+        return jsonify({'message': 'Usuario no encontrado'}), 401
+
+    if check_password_hash(usuario.password_hash, data['password']):
+        token = create_access_token(identity=usuario.public_id)
+        return jsonify({
+            'token': token,
+            'user': {
+                'nombre': usuario.nombre,
+                'email': usuario.email,
+                'tipo': usuario.tipo
+            }
+        })
+
+    return jsonify({'message': 'Contraseña incorrecta'}), 401
+
+
+@auth_bp.route('/api/auth/register', methods=['POST'])
+def register():
+    """
+    Endpoint estándar de registro (sin presupuesto).
+    """
+    data = request.json
+    email = data.get('email')
+    password = data.get('password')
+    nombre = data.get('nombre')
+    telefono = data.get('telefono', '')  # <--- AQUI CAPTURAMOS EL MÓVIL
+    tipo = data.get('tipo', 'cliente')
+
+    if not email or not password or not nombre:
+        return jsonify({'message': 'Faltan datos'}), 400
+
+    if Usuario.query.filter_by(email=email).first():
+        return jsonify({'message': 'El usuario ya existe'}), 400
+
+    hashed_password = generate_password_hash(password, method='scrypt')
+
+    nuevo_usuario = Usuario(
+        public_id=str(uuid.uuid4()),
+        email=email,
+        nombre=nombre,
+        telefono=telefono,  # Guardamos el móvil
+        password_hash=hashed_password,
+        tipo=tipo
+    )
+
+    db.session.add(nuevo_usuario)
+    db.session.commit()
+
+    token = create_access_token(identity=nuevo_usuario.public_id)
+
+    return jsonify({
+        'message': 'Usuario creado exitosamente',
+        'token': token,
+        'user': {
+            'nombre': nombre,
+            'email': email,
+            'tipo': tipo,
+            'telefono': telefono
+        }
+    }), 201
+
+
+@auth_bp.route('/api/perfil', methods=['GET'])
 @jwt_required()
-def dismiss_bono():
-    """Marca el bono de bienvenida como VISTO para siempre."""
-    user_id = get_jwt_identity()
-    claims = get_jwt()
-    
-    if claims.get('tipo') != 'montador':
-        return jsonify({"error": "Solo montadores"}), 403
+def get_perfil():
+    """
+    Obtiene los datos del perfil del usuario logueado.
+    """
+    current_user_id = get_jwt_identity()
+    usuario = Usuario.query.filter_by(public_id=current_user_id).first()
+
+    if not usuario:
+        return jsonify({'message': 'Usuario no encontrado'}), 404
+
+    return jsonify({
+        'nombre': usuario.nombre,
+        'email': usuario.email,
+        'telefono': usuario.telefono,
+        'direccion': usuario.direccion,
+        'tipo': usuario.tipo,
+        'fecha_registro': usuario.fecha_registro.isoformat()
+    }), 200
+
+
+@auth_bp.route('/api/perfil', methods=['PUT'])
+@jwt_required()
+def update_perfil():
+    """
+    Actualiza los datos del perfil.
+    """
+    current_user_id = get_jwt_identity()
+    usuario = Usuario.query.filter_by(public_id=current_user_id).first()
+
+    if not usuario:
+        return jsonify({'message': 'Usuario no encontrado'}), 404
+
+    data = request.json
+    if 'nombre' in data:
+        usuario.nombre = data['nombre']
+    if 'telefono' in data:
+        usuario.telefono = data['telefono']
+    if 'direccion' in data:
+        usuario.direccion = data['direccion']
+
+    # Cambio de contraseña opcional
+    if 'password' in data and data['password']:
+        usuario.password_hash = generate_password_hash(data['password'])
 
     try:
-        montador = Montador.query.get(user_id)
-        if montador:
-            montador.bono_visto = True
-            db.session.commit()
-            return jsonify({"success": True}), 200
-        return jsonify({"error": "Usuario no encontrado"}), 404
-    except Exception as e: # pylint: disable=broad-exception-caught
+        db.session.commit()
+        return jsonify({'message': 'Perfil actualizado correctamente'}), 200
+    except Exception as e:  # pylint: disable=broad-exception-caught
         db.session.rollback()
-        print(f"Error en dismiss_bono: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({'message': f'Error al actualizar: {str(e)}'}), 500
+
+
+@auth_bp.route('/api/auth/reset-password-request', methods=['POST'])
+def reset_password_request():
+    """
+    Solicita un reseteo de contraseña enviando un código al email.
+    """
+    data = request.json
+    email = data.get('email')
+
+    usuario = Usuario.query.filter_by(email=email).first()
+    if not usuario:
+        # Por seguridad, no decimos si el email existe o no
+        return jsonify({'message': 'Si el email existe, se ha enviado un código.'}), 200
+
+    # Generar código de recuperación
+    code = str(random.randint(100000, 999999))
+    verification_codes[email] = {
+        "code": code,
+        "expires_at": datetime.utcnow() + timedelta(minutes=15),
+        "type": "reset_password"
+    }
+
+    content = f"""
+    <h2>Recuperación de Contraseña - KIQ</h2>
+    <p>Has solicitado restablecer tu contraseña. Usa este código:</p>
+    <h1 style="color: #DC2626; letter-spacing: 5px;">{code}</h1>
+    <p>Si no fuiste tú, ignora este mensaje.</p>
+    """
+
+    if send_email(email, "Recuperar Contraseña", content):
+        return jsonify({'message': 'Código enviado'}), 200
+
+    print(f"⚠️ MODO DEV (Recuperar): Código para {email}: {code}")
+    return jsonify({'message': 'Código enviado (Simulado)'}), 200
+
+
+@auth_bp.route('/api/auth/reset-password', methods=['POST'])
+def reset_password():
+    """
+    Cambia la contraseña usando el código de verificación.
+    """
+    data = request.json
+    email = data.get('email')
+    code = data.get('code')
+    new_password = data.get('new_password')
+
+    if not email or not code or not new_password:
+        return jsonify({'error': 'Faltan datos'}), 400
+
+    # Verificar código
+    record = verification_codes.get(email)
+    if not record or record['code'] != code:
+        return jsonify({'error': 'Código inválido o expirado'}), 400
+
+    if datetime.utcnow() > record['expires_at']:
+        return jsonify({'error': 'El código ha expirado'}), 400
+
+    if record.get('type') != 'reset_password':
+        return jsonify({'error': 'Código inválido para esta operación'}), 400
+
+    # Cambiar contraseña
+    usuario = Usuario.query.filter_by(email=email).first()
+    if usuario:
+        usuario.password_hash = generate_password_hash(new_password)
+        db.session.commit()
+        # Eliminar código usado
+        del verification_codes[email]
+        return jsonify({'message': 'Contraseña actualizada con éxito'}), 200
+
+    return jsonify({'error': 'Usuario no encontrado'}), 404
