@@ -31,14 +31,14 @@ try:
     VISION_CLIENT = vision.ImageAnnotatorClient()
 except AuthCredentialsError as e:
     print(f"⚠️ Error Credenciales Vision: {e}")
-except Exception as e: # pylint: disable=broad-exception-caught
+except Exception as e:  # pylint: disable=broad-exception-caught
     print(f"⚠️ Error desconocido Vision Client: {e}")
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-    except Exception as e: # pylint: disable=broad-exception-caught
+    except Exception as e:  # pylint: disable=broad-exception-caught
         print(f"⚠️ Error Gemini Config: {e}")
         GEMINI_API_KEY = None
 
@@ -122,13 +122,6 @@ TARIFARIO = {
     },
 }
 
-NUMEROS_TEXTO = {
-    "un": 1, "una": 1, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5,
-    "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10,
-    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
-    "seven": 7, "eight": 8, "nine": 9, "ten": 10
-}
-
 # --- CEREBRO IA ESTRICTO (ACTUALIZADO) ---
 def analizar_con_gemini_estricto(texto_usuario):
     """
@@ -149,9 +142,11 @@ TUS OBJETIVOS:
    Devuelve: [{{ "tipo": "saludo", "cantidad": 0 }}]
 
 2. Si menciona muebles, extrae los datos (Validación Estricta):
-   - ARMARIOS: ¿Tipo puerta? (corredera/batiente). ¿Cantidad puertas?
+   - ARMARIOS:
+     * ¿Tipo puerta? (corredera/batiente). SI FALTA -> "falta_info": ["tipo_puerta"].
+     * ¿Cantidad puertas? SI FALTA -> "falta_info": ["num_puertas"].
    - CAMAS/CANAPÉS: ¿Medida? (90, 135, 150...).
-   - Si falta info, usa "falta_info": ["tipo_puerta"] o ["num_puertas"].
+   - Si falta info, usa "falta_info": ["tipo_puerta"] o ["num_puertas"] o ["medida"].
 
 ESTRUCTURA DE RESPUESTA JSON (Lista de objetos):
 [
@@ -180,9 +175,10 @@ Responde SOLO con el JSON válido.
             datos = [datos]
         return datos
 
-    except Exception as e: # pylint: disable=broad-exception-caught
+    except Exception as e:  # pylint: disable=broad-exception-caught
         print(f"⚠️ Error Gemini Estricto: {e}")
         return None
+
 
 # --- FALLBACK: SPACY + REGEX ---
 def analizar_con_spacy_basico(descripcion):
@@ -199,7 +195,7 @@ def analizar_con_spacy_basico(descripcion):
 
     for token in doc:
         # Evitamos duplicados básicos
-        if token.i > 0 and token.lemma_ == doc[token.i-1].lemma_:
+        if token.i > 0 and token.lemma_ == doc[token.i - 1].lemma_:
             continue
 
         for key, data in TARIFARIO.items():
@@ -226,12 +222,22 @@ def analizar_con_spacy_basico(descripcion):
                         texto_lower
                     )
                     if match_num:
-                        num_map = {"dos": 2, "tres": 3, "cuatro": 4, "cinco": 5}
-                        val = match_num.group(1)
-                        if val.isdigit():
-                            item["atributos"]["num_puertas"] = int(val)
+                        # Si hay un número asociado a "puertas", comprobamos el valor
+                        pass  # La lógica compleja de regex se simplifica para fallback
+                        # Extracción simple de dígitos si existen cerca
+                        nums = re.findall(r'\d+', texto_lower)
+                        if nums:
+                            item["atributos"]["num_puertas"] = int(nums[0])
                         else:
-                            item["atributos"]["num_puertas"] = num_map.get(val, 2)
+                            # Si detectamos texto numérico simple
+                            if "dos" in texto_lower:
+                                item["atributos"]["num_puertas"] = 2
+                            elif "tres" in texto_lower:
+                                item["atributos"]["num_puertas"] = 3
+                            elif "cuatro" in texto_lower:
+                                item["atributos"]["num_puertas"] = 4
+                            else:
+                                item["falta_info"].append("num_puertas")
                     else:
                         item["falta_info"].append("num_puertas")
 
@@ -249,6 +255,7 @@ def analizar_con_spacy_basico(descripcion):
                 break
 
     return detectados
+
 
 # --- RUTA PRINCIPAL ---
 @calculator_bp.route('/calcular_presupuesto', methods=['POST'])
@@ -271,12 +278,12 @@ def calcular_presupuesto():
         direccion_cliente = data.get('direccion_cliente')
         # El frontend envía 'analisis', aquí lo capturamos
         analisis_raw = data.get('analisis')
-        # Si 'analisis' viene con la estructura {necesita_anclaje:..., items: [...]}, extraemos items
+        # Si 'analisis' viene con la estructura correcta, extraemos items
         if analisis_raw and isinstance(analisis_raw, dict) and 'items' in analisis_raw:
-             analisis_previo = analisis_raw['items']
+            analisis_previo = analisis_raw['items']
         elif analisis_raw:
-             analisis_previo = analisis_raw
-        
+            analisis_previo = analisis_raw
+
         # Recuperar URLs si vienen en el JSON para no perderlas
         if data.get('image_urls'):
             image_urls = data.get('image_urls')
@@ -302,7 +309,7 @@ def calcular_presupuesto():
                         gcs_url = upload_image_to_gcs(file, folder="cotizaciones")
                         if gcs_url:
                             image_urls.append(gcs_url)
-                        
+
                         if index == 0 and VISION_CLIENT:
                             file_stream.seek(0)
                             image = vision.Image(content=file_stream.getvalue())
@@ -311,7 +318,7 @@ def calcular_presupuesto():
                             if not response.error.message:
                                 labels = response.label_annotations
                                 image_labels = [f"{l.description}" for l in labels[:3]]
-                    except Exception as e: # pylint: disable=broad-exception-caught
+                    except Exception as e:  # pylint: disable=broad-exception-caught
                         print(f"Error img {index}: {e}")
 
     # 2. PROCESAMIENTO INTELIGENTE
@@ -336,7 +343,7 @@ def calcular_presupuesto():
                 "MUEBLE_PROBABLE": "desconocido",
                 "mensaje": "No entiendo qué mueble es."
             }), 422
-        
+
         # Si Gemini dice que es un saludo puro ("Hola", "Buenos días")
         if len(resultados) == 1 and resultados[0].get("tipo") == "saludo":
             return jsonify({
@@ -360,13 +367,14 @@ def calcular_presupuesto():
             return jsonify({
                 "ACLARACION_REQUERIDA": True,
                 "MUEBLE_PROBABLE": preguntas_necesarias[0]["tipo_mueble"],
+                "CAMPOS_FALTANTES": preguntas_necesarias[0]["dato_faltante"],
                 "mensaje": "Se requiere aclaración de cantidad o detalles."
             }), 422
 
         muebles_procesados = resultados
 
     # 3. CÁLCULO DE PRECIO
-    coste_muebles_base = 0 
+    coste_muebles_base = 0
     coste_extras = 0
     detalles_factura = []
     anclaje_global = False
@@ -463,7 +471,7 @@ def calcular_presupuesto():
         # ESTE OBJETO 'analisis' ES CRUCIAL PARA EL FRONTEND
         "analisis": {
             "necesita_anclaje_general": anclaje_global,
-            "items": muebles_procesados # Guardamos los items procesados
+            "items": muebles_procesados
         },
         "desglose": {
             "muebles_cotizados": muebles_cotizados,
