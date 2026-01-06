@@ -1,20 +1,19 @@
 """
-Rutas de autenticación y registro para la aplicación.
-Maneja login, registro, envío de códigos y recuperación de contraseña.
-Usa RESEND para el envío de correos.
-Adaptado al modelo de datos real (Cliente, Trabajo).
+Rutas de autenticación completas para Kiq Montajes.
+Maneja login universal (Cliente/Montador), registro, recuperación y lógica de calculadora.
+Cumple con estándares Pylint (PEP 8).
 """
 import random
 import os
 from datetime import datetime, timedelta
 # pylint: disable=no-name-in-module
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from werkzeug.security import generate_password_hash, check_password_hash
 import resend
 from app import db
-# IMPORTAMOS TUS MODELOS REALES
-from app.models import Cliente, Trabajo
+# Importamos tus modelos REALES
+from app.models import Cliente, Montador, Trabajo
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -30,9 +29,7 @@ verification_codes = {}
 
 
 def send_email(to_email, subject, content):
-    """
-    Envía un correo electrónico usando RESEND.
-    """
+    """Envía un correo electrónico usando RESEND."""
     if not RESEND_API_KEY:
         print("⚠️ Resend API Key no configurada.")
         return False
@@ -44,74 +41,241 @@ def send_email(to_email, subject, content):
             "subject": subject,
             "html": content,
         }
-        email = resend.Emails.send(params)
-        print(f"📧 Email enviado a {to_email}: ID {email.get('id')}")
+        resend.Emails.send(params)
         return True
     except Exception as e:  # pylint: disable=broad-exception-caught
-        print(f"❌ Error enviando email con Resend: {e}")
+        print(f"❌ Error enviando email: {e}")
         return False
 
 
-@auth_bp.route('/api/auth/send-code', methods=['POST'])
-def send_verification_code():
-    """Genera y envía un código de verificación."""
+# ==========================================
+# RUTAS CRÍTICAS DE LOGIN Y REGISTRO
+# ==========================================
+
+@auth_bp.route('/api/login-universal', methods=['POST'])
+def login_universal():
+    """
+    Ruta que busca tu Frontend. Intenta loguear en tabla Cliente O Montador.
+    """
+    data = request.json
+    if not data or not data.get('email') or not data.get('password'):
+        return jsonify({'message': 'Faltan datos (email o password)'}), 400
+
+    email = data['email']
+    password = data['password']
+
+    # 1. Buscar en CLIENTES
+    cliente = Cliente.query.filter_by(email=email).first()
+    if cliente and check_password_hash(cliente.password_hash, password):
+        token = create_access_token(
+            identity=str(cliente.id),
+            additional_claims={"rol": "cliente"}
+        )
+        return jsonify({
+            'token': token,
+            'user': {
+                'id': cliente.id,
+                'nombre': cliente.nombre,
+                'email': cliente.email,
+                'tipo': 'cliente',
+                'foto_url': cliente.foto_url
+            },
+            'role': 'cliente',
+            'redirect': '/panel-cliente'
+        }), 200
+
+    # 2. Buscar en MONTADORES
+    montador = Montador.query.filter_by(email=email).first()
+    if montador and check_password_hash(montador.password_hash, password):
+        token = create_access_token(
+            identity=str(montador.id),
+            additional_claims={"rol": "montador"}
+        )
+        return jsonify({
+            'token': token,
+            'user': {
+                'id': montador.id,
+                'nombre': montador.nombre,
+                'email': montador.email,
+                'tipo': 'montador',
+                'foto_url': montador.foto_url,
+                'zona': montador.zona_servicio
+            },
+            'role': 'montador',
+            'redirect': '/panel-montador'
+        }), 200
+
+    return jsonify({'message': 'Credenciales incorrectas o usuario no encontrado'}), 401
+
+
+@auth_bp.route('/api/auth/login', methods=['POST'])
+def login_standard():
+    """Endpoint alternativo de login (por compatibilidad)."""
+    return login_universal()
+
+
+@auth_bp.route('/api/auth/register', methods=['POST'])
+def register():
+    """
+    Registro manual (desde la página de registro, no desde el chat).
+    Soporta 'cliente' o 'montador'.
+    """
     data = request.json
     email = data.get('email')
+    password = data.get('password')
+    nombre = data.get('nombre')
+    telefono = data.get('telefono', '')
+    tipo = data.get('tipo', 'cliente')  # Por defecto cliente
 
-    if not email:
-        return jsonify({"error": "Email requerido"}), 400
+    if not email or not password or not nombre:
+        return jsonify({'message': 'Faltan datos obligatorios'}), 400
 
-    code = str(random.randint(100000, 999999))
-    verification_codes[email] = {
-        "code": code,
-        "expires_at": datetime.utcnow() + timedelta(minutes=10)
+    # Verificar si existe en CUALQUIERA de las dos tablas
+    if (Cliente.query.filter_by(email=email).first() or
+            Montador.query.filter_by(email=email).first()):
+        return jsonify({'message': 'El email ya está registrado'}), 400
+
+    hashed_pw = generate_password_hash(password)
+
+    try:
+        nuevo_usuario = None
+        if tipo == 'montador':
+            nuevo_usuario = Montador(
+                email=email,
+                nombre=nombre,
+                telefono=telefono,
+                password_hash=hashed_pw,
+                zona_servicio=data.get('zona', '')  # Extra para montadores
+            )
+        else:
+            nuevo_usuario = Cliente(
+                email=email,
+                nombre=nombre,
+                telefono=telefono,
+                password_hash=hashed_pw
+            )
+
+        db.session.add(nuevo_usuario)
+        db.session.commit()
+
+        # Token
+        token = create_access_token(
+            identity=str(nuevo_usuario.id),
+            additional_claims={"rol": tipo}
+        )
+
+        return jsonify({
+            'message': 'Usuario creado exitosamente',
+            'token': token,
+            'user': {
+                'id': nuevo_usuario.id,
+                'nombre': nombre,
+                'email': email,
+                'tipo': tipo
+            }
+        }), 201
+
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        db.session.rollback()
+        print(f"Error Registro: {e}")
+        return jsonify({'message': 'Error interno al registrar'}), 500
+
+
+@auth_bp.route('/api/perfil', methods=['GET'])
+@jwt_required()
+def get_perfil():
+    """
+    Devuelve el perfil según el rol guardado en el token.
+    """
+    current_user_id = get_jwt_identity()
+    claims = get_jwt()
+    rol = claims.get("rol", "cliente")  # Fallback a cliente si es token viejo
+
+    usuario = None
+    if rol == 'montador':
+        usuario = Montador.query.get(int(current_user_id))
+    else:
+        usuario = Cliente.query.get(int(current_user_id))
+
+    if not usuario:
+        return jsonify({'message': 'Usuario no encontrado'}), 404
+
+    data = {
+        'id': usuario.id,
+        'nombre': usuario.nombre,
+        'email': usuario.email,
+        'telefono': usuario.telefono,
+        'foto_url': usuario.foto_url,
+        'tipo': rol,
+        'fecha_registro': (
+            usuario.fecha_registro.isoformat() if usuario.fecha_registro else None
+        )
     }
 
-    content = f"""
-    <h2>Tu código de verificación KIQ</h2>
-    <p>Usa este código para verificar tu cuenta:</p>
-    <h1 style="color: #4F46E5; letter-spacing: 5px;">{code}</h1>
-    <p>Este código expira en 10 minutos.</p>
-    """
+    if rol == 'montador':
+        data['zona_servicio'] = usuario.zona_servicio
+        data['stripe_connected'] = bool(usuario.stripe_account_id)
 
-    if send_email(email, "Código de Verificación - KIQ", content):
-        return jsonify({"message": "Código enviado"}), 200
-
-    print(f"⚠️ MODO DEV: El código para {email} es {code}")
-    return jsonify({"message": "Código enviado (Simulado)"}), 200
+    return jsonify(data), 200
 
 
-@auth_bp.route('/api/check-email', methods=['POST'])
-def check_email():
-    """Verifica si un email ya existe (Solo Clientes por ahora)."""
+@auth_bp.route('/api/perfil', methods=['PUT'])
+@jwt_required()
+def update_perfil():
+    """Actualizar perfil del Cliente o Montador."""
+    current_user_id = get_jwt_identity()
+    claims = get_jwt()
+    rol = claims.get("rol", "cliente")
+
+    usuario = None
+    if rol == 'montador':
+        usuario = Montador.query.get(int(current_user_id))
+    else:
+        usuario = Cliente.query.get(int(current_user_id))
+
+    if not usuario:
+        return jsonify({'message': 'Usuario no encontrado'}), 404
+
     data = request.json
-    email = data.get('email')
 
-    if not email:
-        return jsonify({"error": "Email requerido"}), 400
+    # Corrección Pylint: sentencias en líneas separadas
+    if 'nombre' in data:
+        usuario.nombre = data['nombre']
+    if 'telefono' in data:
+        usuario.telefono = data['telefono']
 
-    cliente = Cliente.query.filter_by(email=email).first()
+    # Actualización específica para montadores
+    if rol == 'montador' and 'zona_servicio' in data:
+        usuario.zona_servicio = data['zona_servicio']
 
-    if cliente:
-        return jsonify({"status": "existente", "mensaje": "Email ya registrado"}), 200
+    if 'password' in data and data['password']:
+        usuario.password_hash = generate_password_hash(data['password'])
 
-    return jsonify({"status": "nuevo", "mensaje": "Email disponible"}), 200
+    try:
+        db.session.commit()
+        return jsonify({'message': 'Perfil actualizado correctamente'}), 200
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        db.session.rollback()
+        return jsonify({'message': f'Error al actualizar: {str(e)}'}), 500
 
+
+# ==========================================
+# RUTAS DE LA CALCULADORA (CHAT)
+# ==========================================
 
 @auth_bp.route('/api/publicar-y-registrar', methods=['POST'])
 def publicar_y_registrar():
     """
-    Registra un CLIENTE nuevo Y guarda su primer TRABAJO (cotización).
+    Registra CLIENTE nuevo + Crea TRABAJO desde el Chat.
     """
     data = request.json
     try:
-        # 1. Datos del Cliente
         email = data.get('email')
         password = data.get('password')
         nombre = data.get('nombre', 'Cliente')
-        telefono = data.get('telefono', '')
+        telefono = data.get('telefono', '')  # Capturamos móvil
 
-        # 2. Datos del Trabajo (Presupuesto)
+        # Datos Trabajo
         descripcion = data.get('descripcion')
         direccion = data.get('direccion')
         precio = data.get('precio_calculado')
@@ -120,29 +284,30 @@ def publicar_y_registrar():
         desglose = data.get('desglose', {})
 
         if not email or not password:
-            return jsonify({"error": "Email y contraseña requeridos"}), 400
+            return jsonify({"error": "Faltan credenciales"}), 400
 
-        if Cliente.query.filter_by(email=email).first():
+        # Verificación doble
+        if (Cliente.query.filter_by(email=email).first() or
+                Montador.query.filter_by(email=email).first()):
             return jsonify({"error": "El usuario ya existe"}), 400
 
-        # Crear Cliente
+        # 1. Crear Cliente
         nuevo_cliente = Cliente(
             email=email,
             nombre=nombre,
             telefono=telefono,
-            # Usamos set_password si tu modelo lo tiene, o hash directo
             password_hash=generate_password_hash(password)
         )
         db.session.add(nuevo_cliente)
-        db.session.flush()  # Para obtener el ID
+        db.session.flush()
 
-        # Crear Trabajo
+        # 2. Crear Trabajo
         nuevo_trabajo = Trabajo(
             cliente_id=nuevo_cliente.id,
             descripcion=descripcion if descripcion else "Nuevo Montaje",
-            direccion=direccion or "Dirección pendiente",
+            direccion=direccion or "Pendiente",
             precio_calculado=precio if precio else 0.0,
-            estado='cotizacion',  # Usamos un estado inicial válido
+            estado='cotizacion',  # Estado inicial
             imagenes_urls=imagenes,
             etiquetas=etiquetas,
             desglose=desglose
@@ -150,11 +315,12 @@ def publicar_y_registrar():
         db.session.add(nuevo_trabajo)
         db.session.commit()
 
-        # Generar Token (Usamos ID numérico o email como identidad según tu JWT setup)
-        # Asumimos que usas el ID numérico convertido a string
-        access_token = create_access_token(identity=str(nuevo_cliente.id))
+        # 3. Token y Email
+        token = create_access_token(
+            identity=str(nuevo_cliente.id),
+            additional_claims={"rol": "cliente"}
+        )
 
-        # Enviar email
         send_email(
             email,
             "¡Bienvenido a KIQ Montajes!",
@@ -162,26 +328,21 @@ def publicar_y_registrar():
         )
 
         return jsonify({
-            "message": "Cliente y trabajo creados",
-            "access_token": access_token,
-            "usuario": {
-                "nombre": nombre,
-                "email": email,
-                "telefono": telefono,
-                "id": nuevo_cliente.id
-            }
+            "message": "Cuenta creada y trabajo guardado",
+            "access_token": token,
+            "usuario": {"nombre": nombre, "tipo": "cliente"}
         }), 201
 
     except Exception as e:  # pylint: disable=broad-exception-caught
         db.session.rollback()
-        print(f"❌ Error en publicar-y-registrar: {e}")
+        print(f"❌ Error publicar-y-registrar: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
 
 
 @auth_bp.route('/api/login-y-publicar', methods=['POST'])
 def login_y_publicar():
     """
-    Loguea a un cliente existente Y guarda un nuevo Trabajo.
+    Loguea CLIENTE existente + Crea TRABAJO desde el Chat.
     """
     data = request.json
     try:
@@ -196,19 +357,16 @@ def login_y_publicar():
         etiquetas = data.get('etiquetas', [])
         desglose = data.get('desglose', {})
 
-        if not email or not password:
-            return jsonify({"error": "Faltan credenciales"}), 400
-
+        # Solo buscamos en Clientes (los montadores no piden presupuestos así)
         cliente = Cliente.query.filter_by(email=email).first()
 
         if not cliente or not check_password_hash(cliente.password_hash, password):
             return jsonify({"error": "Credenciales inválidas"}), 401
 
-        # Crear Trabajo vinculado
         nuevo_trabajo = Trabajo(
             cliente_id=cliente.id,
             descripcion=descripcion if descripcion else "Nuevo Montaje",
-            direccion=direccion or "Dirección pendiente",
+            direccion=direccion or "Pendiente",
             precio_calculado=precio if precio else 0.0,
             estado='cotizacion',
             imagenes_urls=imagenes,
@@ -218,149 +376,66 @@ def login_y_publicar():
         db.session.add(nuevo_trabajo)
         db.session.commit()
 
-        access_token = create_access_token(identity=str(cliente.id))
+        token = create_access_token(
+            identity=str(cliente.id),
+            additional_claims={"rol": "cliente"}
+        )
 
         return jsonify({
-            "message": "Sesión iniciada y trabajo guardado",
-            "access_token": access_token
+            "message": "Trabajo guardado exitosamente",
+            "access_token": token
         }), 200
 
     except Exception as e:  # pylint: disable=broad-exception-caught
         db.session.rollback()
-        print(f"❌ Error en login-y-publicar: {e}")
+        print(f"❌ Error login-y-publicar: {e}")
         return jsonify({"error": "Error interno"}), 500
 
 
-@auth_bp.route('/api/auth/login', methods=['POST'])
-def login():
-    """Login estándar."""
-    data = request.json
-    if not data or not data.get('email') or not data.get('password'):
-        return jsonify({'message': 'Faltan datos'}), 400
-
-    cliente = Cliente.query.filter_by(email=data['email']).first()
-
-    if not cliente:
-        return jsonify({'message': 'Usuario no encontrado'}), 401
-
-    if check_password_hash(cliente.password_hash, data['password']):
-        token = create_access_token(identity=str(cliente.id))
-        return jsonify({
-            'token': token,
-            'user': {
-                'nombre': cliente.nombre,
-                'email': cliente.email,
-                'tipo': 'cliente'
-            }
-        })
-
-    return jsonify({'message': 'Contraseña incorrecta'}), 401
-
-
-@auth_bp.route('/api/auth/register', methods=['POST'])
-def register():
-    """Registro estándar de Cliente."""
+@auth_bp.route('/api/check-email', methods=['POST'])
+def check_email():
+    """Verifica si el email existe en CUALQUIER tabla."""
     data = request.json
     email = data.get('email')
-    password = data.get('password')
-    nombre = data.get('nombre')
-    telefono = data.get('telefono', '')
 
-    if not email or not password or not nombre:
-        return jsonify({'message': 'Faltan datos'}), 400
-
-    if Cliente.query.filter_by(email=email).first():
-        return jsonify({'message': 'El usuario ya existe'}), 400
-
-    nuevo_cliente = Cliente(
-        email=email,
-        nombre=nombre,
-        telefono=telefono,
-        password_hash=generate_password_hash(password)
+    exists = (
+        Cliente.query.filter_by(email=email).first() or
+        Montador.query.filter_by(email=email).first()
     )
 
-    db.session.add(nuevo_cliente)
-    db.session.commit()
-
-    token = create_access_token(identity=str(nuevo_cliente.id))
-
-    return jsonify({
-        'message': 'Usuario creado exitosamente',
-        'token': token,
-        'user': {
-            'nombre': nombre,
-            'email': email,
-            'tipo': 'cliente',
-            'telefono': telefono
-        }
-    }), 201
+    if exists:
+        return jsonify({"status": "existente", "mensaje": "Registrado"}), 200
+    return jsonify({"status": "nuevo", "mensaje": "Disponible"}), 200
 
 
-@auth_bp.route('/api/perfil', methods=['GET'])
-@jwt_required()
-def get_perfil():
-    """Perfil del Cliente."""
-    current_user_id = get_jwt_identity()
-    cliente = Cliente.query.get(int(current_user_id))
-
-    if not cliente:
-        return jsonify({'message': 'Usuario no encontrado'}), 404
-
-    return jsonify({
-        'nombre': cliente.nombre,
-        'email': cliente.email,
-        'telefono': cliente.telefono,
-        'tipo': 'cliente',
-        'fecha_registro': cliente.fecha_registro.isoformat()
-    }), 200
-
-
-@auth_bp.route('/api/perfil', methods=['PUT'])
-@jwt_required()
-def update_perfil():
-    """Actualizar perfil del Cliente."""
-    current_user_id = get_jwt_identity()
-    cliente = Cliente.query.get(int(current_user_id))
-
-    if not cliente:
-        return jsonify({'message': 'Usuario no encontrado'}), 404
-
-    data = request.json
-    if 'nombre' in data: cliente.nombre = data['nombre']
-    if 'telefono' in data: cliente.telefono = data['telefono']
-
-    if 'password' in data and data['password']:
-        cliente.password_hash = generate_password_hash(data['password'])
-
-    try:
-        db.session.commit()
-        return jsonify({'message': 'Perfil actualizado correctamente'}), 200
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'message': f'Error al actualizar: {str(e)}'}), 500
-
+# ==========================================
+# RECUPERACIÓN DE CONTRASEÑA
+# ==========================================
 
 @auth_bp.route('/api/auth/reset-password-request', methods=['POST'])
 def reset_password_request():
-    """Solicita reseteo de contraseña."""
+    """Solicita el reseteo de contraseña."""
     data = request.json
     email = data.get('email')
 
-    cliente = Cliente.query.filter_by(email=email).first()
-    # No revelamos si existe o no por seguridad, pero si existe enviamos código
-    if cliente:
+    # Buscamos en ambos
+    usuario = (
+        Cliente.query.filter_by(email=email).first() or
+        Montador.query.filter_by(email=email).first()
+    )
+
+    if usuario:
         code = str(random.randint(100000, 999999))
         verification_codes[email] = {
             "code": code,
             "expires_at": datetime.utcnow() + timedelta(minutes=15),
             "type": "reset_password"
         }
-        content = f"<h2>Recuperación KIQ</h2><h1>{code}</h1>"
-        
+        content = f"<h2>Recuperación KIQ</h2><p>Tu código es:</p><h1>{code}</h1>"
+
         if send_email(email, "Recuperar Contraseña", content):
             return jsonify({'message': 'Código enviado'}), 200
-        
-        # Modo Dev fallback
+
         print(f"⚠️ MODO DEV: Código {code}")
 
     return jsonify({'message': 'Si el email existe, se ha enviado un código.'}), 200
@@ -368,7 +443,7 @@ def reset_password_request():
 
 @auth_bp.route('/api/auth/reset-password', methods=['POST'])
 def reset_password():
-    """Cambia la contraseña."""
+    """Resetea la contraseña."""
     data = request.json
     email = data.get('email')
     code = data.get('code')
@@ -381,14 +456,17 @@ def reset_password():
     if not record or record['code'] != code:
         return jsonify({'error': 'Código inválido o expirado'}), 400
 
-    if datetime.utcnow() > record['expires_at']:
-        return jsonify({'error': 'El código ha expirado'}), 400
-
+    # Buscamos quién es para actualizar su pass
     cliente = Cliente.query.filter_by(email=email).first()
+    montador = Montador.query.filter_by(email=email).first()
+
     if cliente:
         cliente.password_hash = generate_password_hash(new_password)
-        db.session.commit()
-        del verification_codes[email]
-        return jsonify({'message': 'Contraseña actualizada con éxito'}), 200
+    elif montador:
+        montador.password_hash = generate_password_hash(new_password)
+    else:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
 
-    return jsonify({'error': 'Usuario no encontrado'}), 404
+    db.session.commit()
+    del verification_codes[email]
+    return jsonify({'message': 'Contraseña actualizada con éxito'}), 200
