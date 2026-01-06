@@ -1,6 +1,7 @@
 """
 Rutas de autenticación y registro para la aplicación.
 Maneja login, registro, envío de códigos y recuperación de contraseña.
+Usa RESEND para el envío de correos.
 """
 import random
 import uuid
@@ -10,16 +11,19 @@ from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+import resend  # Usamos Resend en lugar de SendGrid
 from app import db
 from app.models import Usuario, Presupuesto
 
 auth_bp = Blueprint('auth', __name__)
 
-# --- CONFIGURACIÓN EMAIL ---
-SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
-SENDER_EMAIL = os.getenv('SENDER_EMAIL')
+# --- CONFIGURACIÓN EMAIL (RESEND) ---
+RESEND_API_KEY = os.getenv('RESEND_API_KEY')
+# Si no tienes un sender verificado, Resend usa 'onboarding@resend.dev' para pruebas
+SENDER_EMAIL = os.getenv('SENDER_EMAIL', 'onboarding@resend.dev')
+
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
 
 # --- ALMACÉN TEMPORAL DE CÓDIGOS (En producción usar Redis) ---
 verification_codes = {}
@@ -27,25 +31,24 @@ verification_codes = {}
 
 def send_email(to_email, subject, content):
     """
-    Envía un correo electrónico usando SendGrid.
+    Envía un correo electrónico usando RESEND.
     """
-    if not SENDGRID_API_KEY or not SENDER_EMAIL:
-        print("⚠️ SendGrid no configurado.")
+    if not RESEND_API_KEY:
+        print("⚠️ Resend API Key no configurada.")
         return False
 
-    message = Mail(
-        from_email=SENDER_EMAIL,
-        to_emails=to_email,
-        subject=subject,
-        html_content=content
-    )
     try:
-        sg = SendGridAPIClient(SENDGRID_API_KEY)
-        response = sg.send(message)
-        print(f"📧 Email enviado a {to_email}: {response.status_code}")
+        params = {
+            "from": SENDER_EMAIL,
+            "to": [to_email],
+            "subject": subject,
+            "html": content,
+        }
+        email = resend.Emails.send(params)
+        print(f"📧 Email enviado a {to_email}: ID {email.get('id')}")
         return True
     except Exception as e:  # pylint: disable=broad-exception-caught
-        print(f"❌ Error enviando email: {e}")
+        print(f"❌ Error enviando email con Resend: {e}")
         return False
 
 
@@ -76,7 +79,7 @@ def send_verification_code():
     if send_email(email, "Código de Verificación - KIQ", content):
         return jsonify({"message": "Código enviado"}), 200
 
-    # Fallback para desarrollo si no hay email configurado
+    # Fallback para desarrollo si falla el envío
     print(f"⚠️ MODO DEV: El código para {email} es {code}")
     return jsonify({"message": "Código enviado (Simulado en logs)"}), 200
 
