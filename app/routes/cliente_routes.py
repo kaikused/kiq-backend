@@ -21,7 +21,8 @@ cliente_bp = Blueprint('cliente', __name__)
 def publicar_trabajo_logueado():
     """Publica un trabajo para un usuario ya autenticado."""
     claims = get_jwt()
-    if claims.get('tipo') != 'cliente':
+    # CORRECCIÓN QUIRÚRGICA: Cambiado 'tipo' por 'rol'
+    if claims.get('rol') != 'cliente':
         return jsonify({"error": "Acceso no autorizado"}), 403
 
     cliente_id = get_jwt_identity()
@@ -93,7 +94,8 @@ def publicar_trabajo_logueado():
 def get_mis_trabajos():
     """Obtiene los trabajos del cliente (incluyendo cotizaciones)."""
     claims = get_jwt()
-    if claims.get('tipo') != 'cliente':
+    # CORRECCIÓN QUIRÚRGICA: Cambiado 'tipo' por 'rol'
+    if claims.get('rol') != 'cliente':
         return jsonify({"error": "Acceso no autorizado"}), 403
 
     try:
