@@ -580,3 +580,42 @@ def admin_get_todos_los_trabajos():
         })
 
     return jsonify(lista_final), 200
+
+@auth_bp.route('/admin/usuarios', methods=['GET'])
+def admin_get_usuarios():
+    """Obtiene lista combinada de Clientes y Montadores para el Admin."""
+    if request.headers.get('x-admin-secret') != 'kiq2025master':
+        return jsonify({'error': 'Acceso denegado.'}), 401
+
+    lista_usuarios = []
+
+    # 1. Obtener Montadores
+    montadores = Montador.query.all()
+    for m in montadores:
+        lista_usuarios.append({
+            "id": m.id,
+            "tipo": "montador",
+            "nombre": m.nombre,
+            "email": m.email,
+            "telefono": m.telefono,
+            "zona": m.zona_servicio,
+            "fecha": m.fecha_registro.strftime('%Y-%m-%d') if m.fecha_registro else "N/A"
+        })
+
+    # 2. Obtener Clientes
+    clientes = Cliente.query.all()
+    for c in clientes:
+        lista_usuarios.append({
+            "id": c.id,
+            "tipo": "cliente",
+            "nombre": c.nombre,
+            "email": c.email,
+            "telefono": c.telefono,
+            "zona": "N/A", # Clientes no suelen tener zona fija de servicio
+            "fecha": c.fecha_registro.strftime('%Y-%m-%d') if c.fecha_registro else "N/A"
+        })
+
+    # Ordenar por fecha reciente (opcional)
+    # lista_usuarios.sort(key=lambda x: x['fecha'], reverse=True)
+
+    return jsonify(lista_usuarios), 200
