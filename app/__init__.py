@@ -61,9 +61,10 @@ def create_app():
     # --- INICIALIZAR EXTENSIONES ---
     db.init_app(app)
 
-    # --- CONFIGURACIÓN CORS (PROFESIONAL) ---
+    # --- CONFIGURACIÓN CORS (CORREGIDA) ---
     # Permitimos acceso total desde tu dominio real y localhost
     # supports_credentials=True es el estándar para permitir cookies/tokens seguros
+    # SE HA AÑADIDO "Cache-Control" A LA LISTA DE HEADERS PERMITIDOS
     cors.init_app(app, resources={r"/*": {
         "origins": [
             "https://kiq.es",
@@ -73,7 +74,7 @@ def create_app():
             "http://localhost:3001"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Cache-Control"],
         "supports_credentials": True
     }})
     # -------------------------------------
