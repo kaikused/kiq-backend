@@ -1,6 +1,7 @@
 """
 Rutas de autenticación completas para Kiq Montajes.
 Maneja login universal (Cliente/Montador), registro, recuperación y lógica de calculadora.
+Incluye panel de administración seguro con TELÉFONO visible.
 Cumple con estándares Pylint (PEP 8).
 """
 import random
@@ -49,10 +50,9 @@ def send_email(to_email, subject, content):
 
 
 # ==========================================
-# RUTAS DE CÓDIGOS DE VERIFICACIÓN (La que faltaba)
+# RUTAS DE CÓDIGOS DE VERIFICACIÓN
 # ==========================================
 
-# Ruta final: /api/auth/send-code
 @auth_bp.route('/auth/send-code', methods=['POST'])
 def send_verification_code():
     """Genera y envía un código de verificación."""
@@ -86,7 +86,6 @@ def send_verification_code():
 # RUTAS CRÍTICAS DE LOGIN Y REGISTRO
 # ==========================================
 
-# Ruta final: /api/login-universal
 @auth_bp.route('/login-universal', methods=['POST'])
 def login_universal():
     """
@@ -113,6 +112,7 @@ def login_universal():
                 'nombre': cliente.nombre,
                 'email': cliente.email,
                 'tipo': 'cliente',
+                'telefono': cliente.telefono,  # INCLUIDO
                 'foto_url': cliente.foto_url
             },
             'role': 'cliente',
@@ -133,6 +133,7 @@ def login_universal():
                 'nombre': montador.nombre,
                 'email': montador.email,
                 'tipo': 'montador',
+                'telefono': montador.telefono,  # INCLUIDO
                 'foto_url': montador.foto_url,
                 'zona': montador.zona_servicio
             },
@@ -143,14 +144,12 @@ def login_universal():
     return jsonify({'message': 'Credenciales incorrectas o usuario no encontrado'}), 401
 
 
-# Ruta final: /api/auth/login
 @auth_bp.route('/auth/login', methods=['POST'])
 def login_standard():
     """Endpoint alternativo de login."""
     return login_universal()
 
 
-# Ruta final: /api/auth/register
 @auth_bp.route('/auth/register', methods=['POST'])
 def register():
     """Registro manual."""
@@ -158,7 +157,7 @@ def register():
     email = data.get('email')
     password = data.get('password')
     nombre = data.get('nombre')
-    telefono = data.get('telefono', '')
+    telefono = data.get('telefono', '')  # CAPTURAMOS TELÉFONO
     tipo = data.get('tipo', 'cliente')
 
     if not email or not password or not nombre:
@@ -203,6 +202,7 @@ def register():
                 'id': nuevo_usuario.id,
                 'nombre': nombre,
                 'email': email,
+                'telefono': telefono,
                 'tipo': tipo
             }
         }), 201
@@ -213,7 +213,6 @@ def register():
         return jsonify({'message': 'Error interno al registrar'}), 500
 
 
-# Ruta final: /api/perfil
 @auth_bp.route('/perfil', methods=['GET'])
 @jwt_required()
 def get_perfil():
@@ -235,7 +234,7 @@ def get_perfil():
         'id': usuario.id,
         'nombre': usuario.nombre,
         'email': usuario.email,
-        'telefono': usuario.telefono,
+        'telefono': usuario.telefono,  # INCLUIDO
         'foto_url': usuario.foto_url,
         'tipo': rol,
         'fecha_registro': (
@@ -250,7 +249,6 @@ def get_perfil():
     return jsonify(data), 200
 
 
-# Ruta final: /api/perfil
 @auth_bp.route('/perfil', methods=['PUT'])
 @jwt_required()
 def update_perfil():
@@ -273,7 +271,7 @@ def update_perfil():
     if 'nombre' in data:
         usuario.nombre = data['nombre']
     if 'telefono' in data:
-        usuario.telefono = data['telefono']
+        usuario.telefono = data['telefono']  # ACTUALIZAR TELÉFONO
     if rol == 'montador' and 'zona_servicio' in data:
         usuario.zona_servicio = data['zona_servicio']
     if 'password' in data and data['password']:
@@ -291,7 +289,6 @@ def update_perfil():
 # RUTAS DE LA CALCULADORA (CHAT)
 # ==========================================
 
-# Ruta final: /api/publicar-y-registrar
 @auth_bp.route('/publicar-y-registrar', methods=['POST'])
 def publicar_y_registrar():
     """Registra CLIENTE nuevo + Crea TRABAJO."""
@@ -300,7 +297,7 @@ def publicar_y_registrar():
         email = data.get('email')
         password = data.get('password')
         nombre = data.get('nombre', 'Cliente')
-        telefono = data.get('telefono', '')
+        telefono = data.get('telefono', '')  # CAPTURAMOS MÓVIL
 
         # Datos Trabajo
         descripcion = data.get('descripcion')
@@ -320,7 +317,7 @@ def publicar_y_registrar():
         nuevo_cliente = Cliente(
             email=email,
             nombre=nombre,
-            telefono=telefono,
+            telefono=telefono,  # GUARDAMOS MÓVIL
             password_hash=generate_password_hash(password)
         )
         db.session.add(nuevo_cliente)
@@ -353,7 +350,7 @@ def publicar_y_registrar():
         return jsonify({
             "message": "Cuenta creada",
             "access_token": token,
-            "usuario": {"nombre": nombre, "tipo": "cliente"}
+            "usuario": {"nombre": nombre, "tipo": "cliente", "telefono": telefono}
         }), 201
 
     except Exception as e:  # pylint: disable=broad-exception-caught
@@ -362,7 +359,6 @@ def publicar_y_registrar():
         return jsonify({"error": "Error interno del servidor"}), 500
 
 
-# Ruta final: /api/login-y-publicar
 @auth_bp.route('/login-y-publicar', methods=['POST'])
 def login_y_publicar():
     """Loguea CLIENTE + Crea TRABAJO."""
@@ -370,7 +366,7 @@ def login_y_publicar():
     try:
         email = data.get('email')
         password = data.get('password')
-        
+
         # Datos Trabajo
         descripcion = data.get('descripcion')
         direccion = data.get('direccion')
@@ -413,7 +409,6 @@ def login_y_publicar():
         return jsonify({"error": "Error interno"}), 500
 
 
-# Ruta final: /api/check-email
 @auth_bp.route('/check-email', methods=['POST'])
 def check_email():
     """Verifica si el email existe."""
@@ -430,7 +425,6 @@ def check_email():
     return jsonify({"status": "nuevo", "mensaje": "Disponible"}), 200
 
 
-# Ruta final: /api/auth/reset-password-request
 @auth_bp.route('/auth/reset-password-request', methods=['POST'])
 def reset_password_request():
     """Solicita el reseteo de contraseña."""
@@ -459,7 +453,6 @@ def reset_password_request():
     return jsonify({'message': 'Si el email existe, se ha enviado un código.'}), 200
 
 
-# Ruta final: /api/auth/reset-password
 @auth_bp.route('/auth/reset-password', methods=['POST'])
 def reset_password():
     """Resetea la contraseña."""
@@ -488,3 +481,48 @@ def reset_password():
     db.session.commit()
     del verification_codes[email]
     return jsonify({'message': 'Contraseña actualizada con éxito'}), 200
+
+
+# ==========================================
+# RUTA DEL PANEL DE ADMINISTRADOR (NUEVA)
+# ==========================================
+
+@auth_bp.route('/admin/todos-los-trabajos', methods=['GET'])
+def admin_get_todos_los_trabajos():
+    """
+    Ruta secreta para el AdminDashboard.
+    Devuelve datos LIMPIOS + TELÉFONO (sin tarjetas ni passwords).
+    Requiere header 'x-admin-secret': 'kiq2025master'.
+    """
+    secret = request.headers.get('x-admin-secret')
+    if secret != 'kiq2025master':
+        return jsonify({'error': 'Acceso denegado.'}), 401
+
+    # Obtenemos trabajos ordenados por fecha
+    trabajos = Trabajo.query.order_by(Trabajo.fecha_creacion.desc()).all()
+
+    lista_final = []
+
+    for t in trabajos:
+        cliente = Cliente.query.get(t.cliente_id)
+        montador_nombre = "Sin asignar"
+
+        if t.montador_id:
+            montador = Montador.query.get(t.montador_id)
+            if montador:
+                montador_nombre = montador.nombre
+
+        # Construimos el objeto SOLO con datos de contacto útiles
+        lista_final.append({
+            "id": t.id,
+            "fecha": t.fecha_creacion.strftime('%Y-%m-%d %H:%M'),
+            "cliente": cliente.nombre if cliente else "Desconocido",
+            "email_cliente": cliente.email if cliente else "",
+            "telefono_cliente": cliente.telefono if cliente else "",  # AQUÍ ESTÁ EL TELÉFONO
+            "descripcion": t.descripcion,
+            "precio": t.precio_estimado if t.precio_estimado else t.precio_calculado,
+            "montador": montador_nombre,
+            "estado": t.estado
+        })
+
+    return jsonify(lista_final), 200
