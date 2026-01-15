@@ -52,7 +52,8 @@ def send_email(to_email, subject, content):
 # RUTAS CRÍTICAS DE LOGIN Y REGISTRO
 # ==========================================
 
-@auth_bp.route('/api/login-universal', methods=['POST'])
+# CORREGIDO: Quitamos /api del inicio
+@auth_bp.route('/login-universal', methods=['POST'])
 def login_universal():
     """
     Ruta que busca tu Frontend. Intenta loguear en tabla Cliente O Montador.
@@ -108,13 +109,15 @@ def login_universal():
     return jsonify({'message': 'Credenciales incorrectas o usuario no encontrado'}), 401
 
 
-@auth_bp.route('/api/auth/login', methods=['POST'])
+# CORREGIDO: Quitamos /api del inicio
+@auth_bp.route('/auth/login', methods=['POST'])
 def login_standard():
     """Endpoint alternativo de login (por compatibilidad)."""
     return login_universal()
 
 
-@auth_bp.route('/api/auth/register', methods=['POST'])
+# CORREGIDO: Quitamos /api del inicio
+@auth_bp.route('/auth/register', methods=['POST'])
 def register():
     """
     Registro manual (desde la página de registro, no desde el chat).
@@ -181,7 +184,8 @@ def register():
         return jsonify({'message': 'Error interno al registrar'}), 500
 
 
-@auth_bp.route('/api/perfil', methods=['GET'])
+# CORREGIDO: Quitamos /api del inicio
+@auth_bp.route('/perfil', methods=['GET'])
 @jwt_required()
 def get_perfil():
     """
@@ -219,7 +223,8 @@ def get_perfil():
     return jsonify(data), 200
 
 
-@auth_bp.route('/api/perfil', methods=['PUT'])
+# CORREGIDO: Quitamos /api del inicio
+@auth_bp.route('/perfil', methods=['PUT'])
 @jwt_required()
 def update_perfil():
     """Actualizar perfil del Cliente o Montador."""
@@ -263,7 +268,8 @@ def update_perfil():
 # RUTAS DE LA CALCULADORA (CHAT)
 # ==========================================
 
-@auth_bp.route('/api/publicar-y-registrar', methods=['POST'])
+# CORREGIDO: Quitamos /api del inicio
+@auth_bp.route('/publicar-y-registrar', methods=['POST'])
 def publicar_y_registrar():
     """
     Registra CLIENTE nuevo + Crea TRABAJO desde el Chat.
@@ -339,7 +345,8 @@ def publicar_y_registrar():
         return jsonify({"error": "Error interno del servidor"}), 500
 
 
-@auth_bp.route('/api/login-y-publicar', methods=['POST'])
+# CORREGIDO: Quitamos /api del inicio
+@auth_bp.route('/login-y-publicar', methods=['POST'])
 def login_y_publicar():
     """
     Loguea CLIENTE existente + Crea TRABAJO desde el Chat.
@@ -392,7 +399,8 @@ def login_y_publicar():
         return jsonify({"error": "Error interno"}), 500
 
 
-@auth_bp.route('/api/check-email', methods=['POST'])
+# CORREGIDO: Quitamos /api del inicio
+@auth_bp.route('/check-email', methods=['POST'])
 def check_email():
     """Verifica si el email existe en CUALQUIER tabla."""
     data = request.json
@@ -412,7 +420,8 @@ def check_email():
 # RECUPERACIÓN DE CONTRASEÑA
 # ==========================================
 
-@auth_bp.route('/api/auth/reset-password-request', methods=['POST'])
+# CORREGIDO: Quitamos /api del inicio
+@auth_bp.route('/auth/reset-password-request', methods=['POST'])
 def reset_password_request():
     """Solicita el reseteo de contraseña."""
     data = request.json
@@ -441,7 +450,8 @@ def reset_password_request():
     return jsonify({'message': 'Si el email existe, se ha enviado un código.'}), 200
 
 
-@auth_bp.route('/api/auth/reset-password', methods=['POST'])
+# CORREGIDO: Quitamos /api del inicio
+@auth_bp.route('/auth/reset-password', methods=['POST'])
 def reset_password():
     """Resetea la contraseña."""
     data = request.json
