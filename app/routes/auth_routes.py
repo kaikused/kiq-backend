@@ -582,7 +582,7 @@ def admin_get_todos_los_trabajos():
             "telefono_cliente": cliente.telefono if cliente else "",
             "descripcion": t.descripcion,
             "precio": (
-                t.precio_estimado if t.precio_estimado else t.precio_calculado
+                getattr(t, 'precio_estimado', 0) if getattr(t, 'precio_estimado', None) else t.precio_calculado
             ),
             "montador": montador_nombre,
             "estado": t.estado
