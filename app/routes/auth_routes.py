@@ -294,7 +294,7 @@ def register():
                 'id': nuevo_usuario.id,
                 'nombre': nombre,
                 'email': email,
-                'tipo': tipo
+                'tipo': 'tipo'
             }
         }), 201
 
@@ -535,7 +535,7 @@ def reset_password():
 
 
 # ==========================================
-# 6. UTILIDADES Y ADMIN
+# 6. UTILIDADES Y ADMIN (ACTUALIZADO: STANDARD AUTH)
 # ==========================================
 
 @auth_bp.route('/check-email', methods=['POST'])
@@ -547,12 +547,21 @@ def check_email():
         return jsonify({"status": "existente"}), 200
     return jsonify({"status": "nuevo"}), 200
 
+def _validar_admin_token():
+    """Función auxiliar para validar la cabecera estándar Bearer."""
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return False
+    # Extraer el token después de 'Bearer '
+    token = auth_header.split(" ")[1]
+    return token == 'kiq2025master'
 
 @auth_bp.route('/admin/todos-los-trabajos', methods=['GET'])
 def admin_get_todos_los_trabajos():
     """Panel Admin Seguro."""
-    if request.headers.get('x-admin-secret') != 'kiq2025master':
-        return jsonify({'error': 'Acceso denegado.'}), 401
+    # Validación Estándar Bearer Token
+    if not _validar_admin_token():
+        return jsonify({'error': 'Acceso denegado. Token inválido.'}), 401
 
     trabajos = Trabajo.query.order_by(Trabajo.fecha_creacion.desc()).all()
     lista_final = []
@@ -584,8 +593,9 @@ def admin_get_todos_los_trabajos():
 @auth_bp.route('/admin/usuarios', methods=['GET'])
 def admin_get_usuarios():
     """Obtiene lista combinada de Clientes y Montadores para el Admin."""
-    if request.headers.get('x-admin-secret') != 'kiq2025master':
-        return jsonify({'error': 'Acceso denegado.'}), 401
+    # Validación Estándar Bearer Token
+    if not _validar_admin_token():
+        return jsonify({'error': 'Acceso denegado. Token inválido.'}), 401
 
     lista_usuarios = []
 
@@ -614,8 +624,5 @@ def admin_get_usuarios():
             "zona": "N/A", # Clientes no suelen tener zona fija de servicio
             "fecha": c.fecha_registro.strftime('%Y-%m-%d') if c.fecha_registro else "N/A"
         })
-
-    # Ordenar por fecha reciente (opcional)
-    # lista_usuarios.sort(key=lambda x: x['fecha'], reverse=True)
 
     return jsonify(lista_usuarios), 200

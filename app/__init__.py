@@ -32,7 +32,6 @@ def create_app():
         'DATABASE_URL', 'sqlite:///default_dev.db'
     )
     # Corrección para Render (Postgres requiere postgresql://)
-    # Dividido en varias líneas para cumplir C0301 (line-too-long)
     db_uri = app.config['SQLALCHEMY_DATABASE_URI']
     if db_uri and db_uri.startswith("postgres://"):
         app.config['SQLALCHEMY_DATABASE_URI'] = db_uri.replace(
@@ -62,18 +61,20 @@ def create_app():
     # --- INICIALIZAR EXTENSIONES ---
     db.init_app(app)
 
-    # --- AQUÍ ESTÁ EL ARREGLO DEL CORS ---
+    # --- CONFIGURACIÓN CORS (PROFESIONAL) ---
     # Permitimos acceso total desde tu dominio real y localhost
+    # supports_credentials=True es el estándar para permitir cookies/tokens seguros
     cors.init_app(app, resources={r"/*": {
         "origins": [
             "https://kiq.es",
             "https://www.kiq.es",
-            "https://kiq-nextjs-tailwind.vercel.app",  # Tu URL de Vercel por si acaso
+            "https://kiq-nextjs-tailwind.vercel.app",  
             "http://localhost:3000",
             "http://localhost:3001"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+        "supports_credentials": True
     }})
     # -------------------------------------
 
