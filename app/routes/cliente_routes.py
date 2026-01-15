@@ -46,8 +46,8 @@ def publicar_trabajo_logueado():
             descripcion=descripcion,
             direccion=direccion,
             precio_calculado=precio_calculado,
-            cliente_id=int(cliente_id),
-            estado='cotizacion',
+            cliente_id=int(cliente_id), # Aseguramos que sea entero
+            estado='cotizacion', # Estado inicial visible
             imagenes_urls=data.get('imagenes', []),
             etiquetas=data.get('etiquetas', []),
             desglose=data.get('desglose')
@@ -91,16 +91,23 @@ def publicar_trabajo_logueado():
 @cliente_bp.route('/cliente/mis-trabajos', methods=['GET'])
 @jwt_required()
 def get_mis_trabajos():
-    """Obtiene los trabajos del cliente."""
+    """Obtiene los trabajos del cliente (incluyendo cotizaciones)."""
     claims = get_jwt()
     if claims.get('tipo') != 'cliente':
         return jsonify({"error": "Acceso no autorizado"}), 403
 
     try:
-        user_id = get_jwt_identity()
+        # CORRECCIÓN IMPORTANTE: Convertir a int para asegurar match en DB
+        user_id = int(get_jwt_identity())
+
+        # Obtenemos TODO sin filtrar por estado
         trabajos = Trabajo.query.filter_by(cliente_id=user_id).order_by(
             Trabajo.fecha_creacion.desc()
         ).all()
+
+        # DEBUG LOG: Esto saldrá en tu consola de Render
+        print(f"🔍 DEBUG: Usuario {user_id} solicita trabajos. Encontrados: {len(trabajos)}")
+
         res = []
         for t in trabajos:
             # Info del Montador (CON FOTO)
@@ -127,7 +134,7 @@ def get_mis_trabajos():
                 "descripcion": t.descripcion,
                 "direccion": t.direccion,
                 "precio_calculado": t.precio_calculado,
-                "estado": t.estado,
+                "estado": t.estado, # Aquí debe llegar 'cotizacion'
                 "fecha_creacion": t.fecha_creacion.isoformat(),
                 "montador_info": montador_info,
                 "imagenes_urls": t.imagenes_urls,
@@ -136,7 +143,9 @@ def get_mis_trabajos():
                 "metodo_pago": t.metodo_pago,
                 "payment_intent_id": t.payment_intent_id
             })
+
         return jsonify(res), 200
+
     except Exception as e: # pylint: disable=broad-exception-caught
         print(f"Error en get_mis_trabajos: {e}")
         return jsonify({"error": "Error al obtener trabajos"}), 500
@@ -152,7 +161,7 @@ def cancelar_trabajo(trabajo_id):
     cliente_id = int(get_jwt_identity())
     try:
         t = Trabajo.query.filter_by(id=trabajo_id, cliente_id=cliente_id).first()
-        
+
         if not t:
             return jsonify({"error": "Trabajo no encontrado"}), 404
 
@@ -165,7 +174,7 @@ def cancelar_trabajo(trabajo_id):
         # Reglas de cancelación:
         if not es_outlet and t.estado not in ['pendiente', 'cotizacion']:
             return jsonify({"error": "No se puede cancelar en este estado"}), 400
-        
+
         if es_outlet and t.estado == 'completado':
             return jsonify({"error": "Ya has comprado este producto."}), 400
 
@@ -252,12 +261,12 @@ def activar_trabajo(trabajo_id):
         trabajo.payment_intent_id = payment_intent_id
         trabajo.estado = 'pendiente'
         trabajo.metodo_pago = 'stripe'
-        
+
         stripe.PaymentIntent.modify(
             payment_intent_id,
             metadata={'trabajo_id': str(trabajo_id), 'cliente_id': str(cliente_id)}
         )
-        
+
         db.session.commit()
         return jsonify({
             "success": True, "message": "Trabajo activo", "estado": "pendiente"
@@ -317,11 +326,11 @@ def confirmar_pago_cliente(trabajo_id):
         ).first()
         if not trabajo:
             return jsonify({"error": "Trabajo no encontrado"}), 404
-        
+
         if trabajo.estado != 'revision_cliente':
             return jsonify({"error": "El trabajo debe estar en revisión."}), 400
 
-        # --- 🆕 BLOQUE NUEVO: ACTUALIZAR ESTADO DEL PRODUCTO OUTLET ---
+        # --- LÓGICA OUTLET: ACTUALIZAR ESTADO DEL PRODUCTO ---
         if trabajo.etiquetas and isinstance(trabajo.etiquetas, dict):
             if trabajo.etiquetas.get('tipo') == 'outlet':
                 product_id = trabajo.etiquetas.get('outlet_product_id')
@@ -341,20 +350,18 @@ def confirmar_pago_cliente(trabajo_id):
                 "success": True, "message": "Finalizado.", "estado": "completado"
             }), 200
 
-        trabajo.estado = 'aprobado_cliente_stripe' 
+        trabajo.estado = 'aprobado_cliente_stripe'
         db.session.commit()
-        
+
         return jsonify({
             "success": True,
             "message": "Aprobación recibida.",
             "estado": "aprobado_cliente_stripe"
         }), 200
-        
+
     except Exception as e: # pylint: disable=broad-exception-caught
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
-    
-    # --- PEGAR AL FINAL DE app/routes/cliente_routes.py ---
 
 @cliente_bp.route('/calcular_presupuesto', methods=['POST'])
 def calcular_presupuesto_nueva():
@@ -365,10 +372,10 @@ def calcular_presupuesto_nueva():
         data = request.json
         # Convertimos a minúsculas para detectar palabras clave
         descripcion = data.get('descripcion', '').lower()
-        
+
         # Lógica de precio base (simple pero efectiva)
         precio_estimado = 50 # Precio base por visita/minimo
-        
+
         if 'armario' in descripcion:
             precio_estimado = 90
             if 'puertas' in descripcion or 'grande' in descripcion:
@@ -379,24 +386,25 @@ def calcular_presupuesto_nueva():
             precio_estimado = 60
         elif 'mesa' in descripcion or 'silla' in descripcion:
             precio_estimado = 45
-            
+
         # RESPUESTA EXACTA que espera tu Frontend
         return jsonify({
             "success": True,
             "precio": precio_estimado,
             "titulo": "Presupuesto Estimado",
-            "mensaje": f"He analizado tu solicitud ('{descripcion}'). El coste estimado sería de {precio_estimado}€ (incluye desplazamiento y montaje básico).",
+            "mensaje": f"He analizado tu solicitud ('{descripcion}'). "
+                       f"El coste estimado sería de {precio_estimado}€ (incluye desplazamiento y montaje básico).",
             "desglose": {
                 "mano_obra": precio_estimado,
                 "materiales": 0
             }
         }), 200
 
-    except Exception as e:
+    except Exception as e: # pylint: disable=broad-exception-caught
         print(f"❌ Error calculadora: {e}")
         # Respuesta de emergencia
         return jsonify({
-            "success": True, 
-            "precio": 50, 
+            "success": True,
+            "precio": 50,
             "mensaje": "No pude calcular exacto, pero el precio base es 50€."
         }), 200
