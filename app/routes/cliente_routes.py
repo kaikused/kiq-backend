@@ -19,14 +19,19 @@ cliente_bp = Blueprint('cliente', __name__)
 @cliente_bp.route('/cliente/publicar-trabajo', methods=['POST'])
 @jwt_required()
 def publicar_trabajo_logueado():
-    """Publica un trabajo para un usuario ya autenticado."""
+    """
+    Guarda un trabajo YA calculado.
+    Esta ruta se llama DESPUÉS de usar la calculadora avanzada,
+    cuando el usuario logueado pulsa 'Confirmar/Publicar'.
+    """
     claims = get_jwt()
-    # CORRECCIÓN QUIRÚRGICA: Cambiado 'tipo' por 'rol'
+    # Verificación de Rol
     if claims.get('rol') != 'cliente':
         return jsonify({"error": "Acceso no autorizado"}), 403
 
     cliente_id = get_jwt_identity()
     data = request.json
+    
     descripcion = data.get('descripcion')
     direccion = data.get('direccion')
     precio_calculado = data.get('precio_calculado')
@@ -35,20 +40,13 @@ def publicar_trabajo_logueado():
     if not all([descripcion, direccion, precio_calculado]):
         return jsonify({"error": "Faltan datos del trabajo"}), 400
 
-    # Validación de precio mínimo
-    try:
-        if float(precio_calculado) < 30:
-            return jsonify({"error": "El presupuesto mínimo es de 30€."}), 400
-    except (TypeError, ValueError):
-        return jsonify({"error": "Formato de precio inválido."}), 400
-
     try:
         nuevo_trabajo = Trabajo(
             descripcion=descripcion,
             direccion=direccion,
             precio_calculado=precio_calculado,
-            cliente_id=int(cliente_id), # Aseguramos que sea entero
-            estado='cotizacion', # Estado inicial visible
+            cliente_id=int(cliente_id),
+            estado='cotizacion',
             imagenes_urls=data.get('imagenes', []),
             etiquetas=data.get('etiquetas', []),
             desglose=data.get('desglose')
@@ -94,21 +92,16 @@ def publicar_trabajo_logueado():
 def get_mis_trabajos():
     """Obtiene los trabajos del cliente (incluyendo cotizaciones)."""
     claims = get_jwt()
-    # CORRECCIÓN QUIRÚRGICA: Cambiado 'tipo' por 'rol'
     if claims.get('rol') != 'cliente':
         return jsonify({"error": "Acceso no autorizado"}), 403
 
     try:
-        # CORRECCIÓN IMPORTANTE: Convertir a int para asegurar match en DB
         user_id = int(get_jwt_identity())
 
-        # Obtenemos TODO sin filtrar por estado
+        # Obtenemos TODO ordenado por fecha
         trabajos = Trabajo.query.filter_by(cliente_id=user_id).order_by(
             Trabajo.fecha_creacion.desc()
         ).all()
-
-        # DEBUG LOG: Esto saldrá en tu consola de Render
-        print(f"🔍 DEBUG: Usuario {user_id} solicita trabajos. Encontrados: {len(trabajos)}")
 
         res = []
         for t in trabajos:
@@ -136,14 +129,15 @@ def get_mis_trabajos():
                 "descripcion": t.descripcion,
                 "direccion": t.direccion,
                 "precio_calculado": t.precio_calculado,
-                "estado": t.estado, # Aquí debe llegar 'cotizacion'
+                "estado": t.estado, 
                 "fecha_creacion": t.fecha_creacion.isoformat(),
                 "montador_info": montador_info,
                 "imagenes_urls": t.imagenes_urls,
                 "foto_finalizacion": t.foto_finalizacion,
                 "desglose": desglose,
                 "metodo_pago": t.metodo_pago,
-                "payment_intent_id": t.payment_intent_id
+                "payment_intent_id": t.payment_intent_id,
+                "etiquetas": t.etiquetas
             })
 
         return jsonify(res), 200
@@ -364,49 +358,3 @@ def confirmar_pago_cliente(trabajo_id):
     except Exception as e: # pylint: disable=broad-exception-caught
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
-
-@cliente_bp.route('/calcular_presupuesto', methods=['POST'])
-def calcular_presupuesto_nueva():
-    """
-    Calculadora robusta para evitar el error 'Análisis inicial no válido'.
-    """
-    try:
-        data = request.json
-        # Convertimos a minúsculas para detectar palabras clave
-        descripcion = data.get('descripcion', '').lower()
-
-        # Lógica de precio base (simple pero efectiva)
-        precio_estimado = 50 # Precio base por visita/minimo
-
-        if 'armario' in descripcion:
-            precio_estimado = 90
-            if 'puertas' in descripcion or 'grande' in descripcion:
-                precio_estimado = 140
-        elif 'cama' in descripcion:
-            precio_estimado = 70
-        elif 'sofá' in descripcion or 'sofa' in descripcion:
-            precio_estimado = 60
-        elif 'mesa' in descripcion or 'silla' in descripcion:
-            precio_estimado = 45
-
-        # RESPUESTA EXACTA que espera tu Frontend
-        return jsonify({
-            "success": True,
-            "precio": precio_estimado,
-            "titulo": "Presupuesto Estimado",
-            "mensaje": f"He analizado tu solicitud ('{descripcion}'). "
-                       f"El coste estimado sería de {precio_estimado}€ (incluye desplazamiento y montaje básico).",
-            "desglose": {
-                "mano_obra": precio_estimado,
-                "materiales": 0
-            }
-        }), 200
-
-    except Exception as e: # pylint: disable=broad-exception-caught
-        print(f"❌ Error calculadora: {e}")
-        # Respuesta de emergencia
-        return jsonify({
-            "success": True,
-            "precio": 50,
-            "mensaje": "No pude calcular exacto, pero el precio base es 50€."
-        }), 200
