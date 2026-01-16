@@ -295,6 +295,11 @@ def montador_stripe_onboarding():
     Genera el enlace de onboarding para Stripe.
     Crea la cuenta Express si no existe antes de crear el link.
     """
+    # 🔒 SEGURIDAD: Verificamos rol para evitar colisión de IDs
+    claims = get_jwt()
+    if claims.get('rol') != 'montador':
+        return jsonify({"error": "Acceso no autorizado"}), 403
+
     montador_id = get_jwt_identity()
 
     try:
@@ -342,6 +347,10 @@ def crear_sesion_gemas():
     user_id = get_jwt_identity()
     claims = get_jwt()
 
+    # 🔒 SEGURIDAD: Solo montadores compran packs de gemas por ahora
+    if claims.get('rol') != 'montador':
+        return jsonify({"error": "Solo montadores pueden comprar gemas"}), 403
+
     data = request.json
     pack_id = data.get('packId')
 
@@ -369,7 +378,7 @@ def crear_sesion_gemas():
             cancel_url=f'{base_url}/panel-montador?compra_gemas=cancelado',
             metadata={
                 'montador_id': user_id,
-                'tipo_usuario': claims.get('rol'),
+                'tipo_usuario': claims.get('rol'), # Esto ahora siempre será 'montador'
                 'cantidad_gemas': pack['gems'],
                 'transaction_type': 'RECARGA'
             }

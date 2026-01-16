@@ -21,7 +21,8 @@ def publicar_producto_outlet():
     """Permite a un Montador (o Cliente) publicar un mueble recuperado."""
     user_id = get_jwt_identity()
     claims = get_jwt()
-    tipo_usuario = claims.get('tipo')
+    # CORREGIDO: Usamos 'rol' en lugar de 'tipo'
+    tipo_usuario = claims.get('rol')
 
     titulo = request.form.get('titulo')
     precio = request.form.get('precio')
@@ -85,7 +86,7 @@ def get_outlet_feed():
         ).limit(50).all()
 
         # LOG DEBUG: Ver qué está devolviendo la BD realmente
-        print(f"🔍 FEED: Encontrados {len(productos)} productos disponibles. IDs: {[p.id for p in productos]}")
+        # print(f"🔍 FEED: Encontrados {len(productos)}")
 
         res = []
         for p in productos:
@@ -120,8 +121,7 @@ def get_outlet_feed():
             })
 
         # 2. Preparamos la respuesta
-        response = make_response(jsonify(res), 200)
-        
+        response = make_response(jsonify(res), 200)        
         # 3. 🛡️ FORZAR NO-CACHE (Crucial para que desaparezcan los vendidos al instante)
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
@@ -195,7 +195,8 @@ def iniciar_chat_outlet():
     try:
         user_id = int(get_jwt_identity())
         claims = get_jwt()
-        tipo_comprador = claims.get('tipo')
+        # CORREGIDO: Usamos 'rol' en lugar de 'tipo'
+        tipo_comprador = claims.get('rol')
 
         data = request.json
         product_id = data.get('producto_id')
@@ -210,7 +211,7 @@ def iniciar_chat_outlet():
         # Permitimos chatear si está reservado, PERO NO SI ESTÁ VENDIDO
         if producto.estado == 'vendido':
             return jsonify({"error": "Este producto ya se vendió."}), 400
-             
+              
         if producto.estado not in ['disponible', 'reservado']:
             return jsonify({"error": "No disponible"}), 400
 
@@ -303,7 +304,7 @@ def crear_intento_pago_producto():
 
 @outlet_bp.route('/outlet/comprar/confirmar-stripe', methods=['POST'])
 @jwt_required()
-def confirmar_compra_stripe():
+def confirmar_compra_stripe_outlet():
     """Paso 2: Confirmar reserva tras pago con tarjeta."""
     data = request.json
     product_id = data.get('product_id')
@@ -330,8 +331,8 @@ def get_mis_productos_publicados():
     claims = get_jwt()
 
     try:
-        # Filtramos por el ID del usuario según su rol
-        if claims.get('tipo') == 'montador':
+        # CORREGIDO: Usamos 'rol' en lugar de 'tipo'
+        if claims.get('rol') == 'montador':
             productos = Product.query.filter_by(montador_id=user_id).order_by(
                 Product.fecha_creacion.desc()
             ).all()
@@ -349,7 +350,6 @@ def get_mis_productos_publicados():
                 "estado": p.estado,  # disponible, reservado, vendido
                 "imagen": p.imagenes_urls[0] if p.imagenes_urls else None,
                 "fecha": p.fecha_creacion.isoformat(),
-                # Si está vendido, podríamos querer saber a quién (futura mejora)
             })
 
         # No cache para ver los cambios al instante
