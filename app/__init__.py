@@ -49,7 +49,6 @@ def create_app():
     # --- CREDENCIALES GOOGLE (Vision AI) ---
     try:
         credentials_path = os.path.join(app.root_path, '..', 'google-credentials.json')
-        # Si la variable de entorno tiene el JSON entero, lo volcamos a un archivo
         if os.getenv('GOOGLE_CREDENTIALS_JSON'):
             with open(credentials_path, 'w', encoding='utf-8') as f:
                 f.write(os.getenv('GOOGLE_CREDENTIALS_JSON'))
@@ -62,23 +61,32 @@ def create_app():
     # --- INICIALIZAR EXTENSIONES ---
     db.init_app(app)
 
-    # 🚑 PARCHE DE AUTO-REPARACIÓN DE BASE DE DATOS 🚑
+    # 🚑 PARCHE DE EMERGENCIA DB (Auto-Fix Columnas Faltantes) 🚑
     with app.app_context():
         try:
             db.create_all()
-            # Intenta añadir la columna 'direccion' a 'clientes' si falta
             with db.engine.connect() as conn:
-                query = text(
-                    "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS direccion VARCHAR(200);"
-                )
-                conn.execute(query)
-                conn.commit()
-                print("✅ DB Patch: Columna 'direccion' verificada en clientes.")
+                # Intento 1: Tabla 'cliente' (según logs de error)
+                try:
+                    conn.execute(text("ALTER TABLE cliente ADD COLUMN IF NOT EXISTS direccion VARCHAR(200)"))
+                    conn.commit()
+                    print("✅ DB Patch: Columna 'direccion' añadida a 'cliente'.")
+                except Exception: # pylint: disable=broad-exception-caught
+                    pass
+                
+                # Intento 2: Tabla 'clientes' (según modelo actual)
+                try:
+                    conn.execute(text("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS direccion VARCHAR(200)"))
+                    conn.commit()
+                    print("✅ DB Patch: Columna 'direccion' añadida a 'clientes'.")
+                except Exception: # pylint: disable=broad-exception-caught
+                    pass
+                    
         except Exception as e:  # pylint: disable=broad-exception-caught
-            print(f"⚠️ Nota DB Patch: {e}")
+            print(f"⚠️ Error leve en DB Patch: {e}")
     # ----------------------------------------------------
 
-    # --- CONFIGURACIÓN CORS (CORREGIDA) ---
+    # --- CONFIGURACIÓN CORS ---
     cors.init_app(app, resources={r"/*": {
         "origins": [
             "https://kiq.es",
@@ -93,27 +101,18 @@ def create_app():
         ],
         "supports_credentials": True
     }})
-    # -------------------------------------
 
     jwt.init_app(app)
     migrate.init_app(app, db)
 
-    # --- REGISTRO DE RUTAS (BLUEPRINTS) ---
-
-    # Calculadora (Prioridad)
+    # --- REGISTRO DE RUTAS ---
     app.register_blueprint(calculator_bp)
-
-    # Rutas Públicas
     app.register_blueprint(public_bp)
-
-    # API Rutas (Prefijo /api)
     app.register_blueprint(auth_bp, url_prefix='/api')
     app.register_blueprint(cliente_bp, url_prefix='/api')
     app.register_blueprint(montador_bp, url_prefix='/api')
     app.register_blueprint(outlet_bp, url_prefix='/api')
     app.register_blueprint(order_bp, url_prefix='/api')
-
-    # Webhooks (Stripe)
     app.register_blueprint(webhooks_bp)
 
     return app
