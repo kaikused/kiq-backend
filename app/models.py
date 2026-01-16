@@ -2,28 +2,27 @@
 Define los modelos de la base de datos para la aplicación.
 Incluye Link, Cliente, Trabajo, Montador, Sistema de Gemas, Verificación, PRODUCTOS y PEDIDOS.
 """
-from datetime import datetime, timedelta
+from datetime import datetime
 import random
 from werkzeug.security import generate_password_hash, check_password_hash
-# Imports de terceros
-from sqlalchemy import Enum
 # Imports locales
 from .extensions import db
 
 
-# --- MODELO DE VERIFICACIÓN ---
-class VerificationCode(db.Model):
+# --- MODELO DE VERIFICACIÓN (Code) ---
+class Code(db.Model):
     """Almacena códigos temporales de verificación de email."""
     __tablename__ = 'verification_codes'
 
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), nullable=False, index=True)
     code = db.Column(db.String(6), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def is_valid(self):
-        """Verifica si el código se creó hace menos de 15 minutos."""
-        return datetime.utcnow() < self.created_at + timedelta(minutes=15)
+        """Verifica si el código sigue vigente."""
+        return datetime.utcnow() < self.expires_at
 
     @staticmethod
     def generate_code():
@@ -93,6 +92,7 @@ class Cliente(db.Model):
     telefono = db.Column(db.String(20))
     fecha_registro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     foto_url = db.Column(db.String(500), nullable=True)
+    direccion = db.Column(db.String(200), nullable=True)
 
     # Relaciones
     trabajos = db.relationship('Trabajo', backref='cliente', lazy=True)
@@ -127,6 +127,9 @@ class Montador(db.Model):
     fecha_registro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     foto_url = db.Column(db.String(500), nullable=True)
     stripe_account_id = db.Column(db.String(100), nullable=True)
+
+    # Gamificación
+    bono_entregado = db.Column(db.Boolean, default=False)
     bono_visto = db.Column(db.Boolean, default=False)
 
     # Relaciones
@@ -167,14 +170,13 @@ class Trabajo(db.Model):
     descripcion = db.Column(db.Text, nullable=False)
     direccion = db.Column(db.String(200), nullable=False)
     precio_calculado = db.Column(db.Float, nullable=False)
-    estado = db.Column(
-        Enum(*ESTADOS_TRABAJO, name='estado_trabajo_enum'),
-        nullable=False, default='pendiente'
-    )
+    # Estados
+    estado = db.Column(db.String(50), default='cotizacion')
     fecha_creacion = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     cliente_id = db.Column(db.Integer, db.ForeignKey('cliente.id'), nullable=False)
     montador_id = db.Column(db.Integer, db.ForeignKey('montador.id'), nullable=True)
     payment_intent_id = db.Column(db.String(100), nullable=True, unique=True)
+    # Corrección línea larga
     metodo_pago = db.Column(
         db.String(20), nullable=False, default='stripe', server_default='stripe'
     )
@@ -182,6 +184,9 @@ class Trabajo(db.Model):
     etiquetas = db.Column(db.JSON, nullable=True)
     desglose = db.Column(db.JSON, nullable=True)
     foto_finalizacion = db.Column(db.String(512), nullable=True)
+    
+    # Campo legacy
+    precio_estimado = db.Column(db.Float, nullable=True)
 
     def __repr__(self):
         return f"<Trabajo {self.id} - {self.estado}>"
