@@ -32,7 +32,6 @@ def get_trabajos_disponibles():
     Obtiene trabajos pendientes y sin asignar.
     🔒 FILTRO DE PRIVACIDAD ACTIVADO: No envía teléfonos ni direcciones exactas.
     """
-    # CORRECCIÓN SEGURIDAD: Verificar rol
     claims = get_jwt()
     if claims.get('rol') != 'montador':
         return jsonify({"error": "Acceso no autorizado"}), 403
@@ -45,7 +44,6 @@ def get_trabajos_disponibles():
         for t in trabajos:
             cliente = Cliente.query.get(t.cliente_id)
 
-            # Manejo de desglose (JSON en DB)
             desglose_data = t.desglose
             if isinstance(desglose_data, str):
                 try:
@@ -53,22 +51,20 @@ def get_trabajos_disponibles():
                 except json.JSONDecodeError:
                     desglose_data = None
 
-            # 🔒 ENMASCARAR DIRECCIÓN (Para evitar puenteo)
-            # Mostramos solo una referencia vaga, no la exacta.
             zona_ref = t.direccion.split(',')[0] if t.direccion else "Málaga"
             direccion_oculta = f"📍 Zona de {zona_ref}"
 
             res.append({
                 "trabajo_id": t.id,
                 "descripcion": t.descripcion,
-                "direccion": direccion_oculta, # <--- DIRECCIÓN PROTEGIDA
-                "direccion_completa": None,    # <--- NO ENVIAMOS LA EXACTA
+                "direccion": direccion_oculta,
+                "direccion_completa": None,
                 "precio_calculado": t.precio_calculado,
                 "fecha_creacion": t.fecha_creacion.isoformat(),
                 "imagenes_urls": t.imagenes_urls,
                 "etiquetas": t.etiquetas,
                 "cliente_nombre": cliente.nombre if cliente else "Usuario Kiq",
-                "cliente_telefono": None,      # <--- TELÉFONO OCULTO (ANTI-VAGOS/PUENTEO)
+                "cliente_telefono": None,
                 "metodo_pago": t.metodo_pago,
                 "desglose": desglose_data
             })
@@ -81,11 +77,7 @@ def get_trabajos_disponibles():
 @montador_bp.route('/montador/mis-trabajos', methods=['GET'])
 @jwt_required()
 def get_mis_trabajos_montador():
-    """
-    Obtiene los trabajos asignados al montador.
-    🔓 ACCESO TOTAL: Aquí SÍ enviamos el teléfono y dirección exacta.
-    """
-    # CORRECCIÓN SEGURIDAD: Verificar rol
+    """Obtiene los trabajos asignados al montador."""
     claims = get_jwt()
     if claims.get('rol') != 'montador':
         return jsonify({"error": "Acceso no autorizado"}), 403
@@ -99,7 +91,6 @@ def get_mis_trabajos_montador():
         for t in trabajos:
             c = Cliente.query.get(t.cliente_id)
 
-            # Manejo de desglose
             desglose_data = t.desglose
             if isinstance(desglose_data, str):
                 try:
@@ -107,20 +98,18 @@ def get_mis_trabajos_montador():
                 except json.JSONDecodeError:
                     desglose_data = None
 
-            # Info del cliente (CON FOTO y TELÉFONO)
             cliente_info = None
             if c:
                 cliente_info = {
                     "nombre": c.nombre,
                     "foto_url": c.foto_url,
-                    # 🔓 DATO LIBERADO: El montador ya puede ver el número
                     "telefono": c.telefono
                 }
 
             res.append({
                 "trabajo_id": t.id,
                 "descripcion": t.descripcion,
-                "direccion": t.direccion, # <--- 🔓 DATO LIBERADO: Dirección exacta
+                "direccion": t.direccion,
                 "precio_calculado": t.precio_calculado,
                 "estado": t.estado,
                 "cliente_nombre": c.nombre if c else "Cliente",
@@ -138,11 +127,7 @@ def get_mis_trabajos_montador():
 @montador_bp.route('/montador/trabajo/<int:trabajo_id>/aceptar', methods=['POST'])
 @jwt_required()
 def aceptar_trabajo(trabajo_id):
-    """
-    El montador acepta un trabajo disponible.
-    Si es pago en efectivo, se cobra la comisión en Gemas aquí.
-    """
-    # CORRECCIÓN SEGURIDAD: Verificar rol
+    """El montador acepta un trabajo disponible."""
     claims = get_jwt()
     if claims.get('rol') != 'montador':
         return jsonify({"error": "Acceso no autorizado"}), 403
@@ -155,33 +140,44 @@ def aceptar_trabajo(trabajo_id):
         if not trabajo or trabajo.estado != 'pendiente' or trabajo.montador_id is not None:
             return jsonify({"error": "Trabajo no disponible"}), 400
 
-        # Lógica de cobro de comisión (Gemas)
+        # --- LÓGICA ANZUELO STRIPE ---
+        if trabajo.metodo_pago == 'stripe':
+            if not montador.stripe_account_id:
+                return jsonify({
+                    "error": "stripe_required",
+                    "message": (
+                        "¡Buenas noticias! Este trabajo se paga con tarjeta. "
+                        "Conecta tu cuenta bancaria para cobrar."
+                    )
+                }), 428
+
+        # --- Lógica de Gemas (Comisión Efectivo) ---
         if trabajo.metodo_pago == 'efectivo_gemas':
-            # Calcular coste (10% del precio * 10 ratio = Precio en gemas)
             coste_gemas = int(trabajo.precio_calculado * 0.10 * 10)
 
-            # Excepción: Primer trabajo gratis
+            # 🎁 BONIFICACIÓN: Primer trabajo GRATIS
             trabajos_previos = Trabajo.query.filter_by(montador_id=montador_id).count()
             if trabajos_previos == 0:
                 coste_gemas = 0
 
             # Verificar saldo
             if montador.wallet.saldo < coste_gemas:
-                return jsonify({"error": "Saldo insuficiente de Gemas"}), 402
+                return jsonify({
+                    "error": f"Necesitas {coste_gemas} Gemas para aceptar este trabajo."
+                }), 402
 
-            # Cobrar
             if coste_gemas > 0:
                 recargar_gemas(
                     wallet_id=montador.wallet.id,
-                    cantidad_recarga=-coste_gemas, # Negativo para restar
-                    descripcion=f'Comisión por trabajo #{trabajo.id}'
+                    cantidad_recarga=-coste_gemas,
+                    descripcion=f'Comisión trabajo #{trabajo.id}'
                 )
 
+        # Asignación final
         trabajo.montador_id = montador.id
         trabajo.estado = 'aceptado'
         db.session.commit()
 
-        # Opcional: Devolver el teléfono al instante sin recargar.
         cliente_telf = trabajo.cliente.telefono if trabajo.cliente else None
 
         return jsonify({
@@ -190,9 +186,8 @@ def aceptar_trabajo(trabajo_id):
             "datos_contacto": {"telefono": cliente_telf}
         }), 200
 
-    except SQLAlchemyError as e:
+    except SQLAlchemyError:
         db.session.rollback()
-        print(f"Error SQL al aceptar trabajo: {e}")
         return jsonify({"error": "Error de base de datos"}), 500
     except Exception as e: # pylint: disable=broad-exception-caught
         db.session.rollback()
@@ -206,7 +201,6 @@ def aceptar_trabajo(trabajo_id):
 def finalizar_con_evidencia(trabajo_id):
     """Sube evidencia y finaliza el trabajo."""
     claims = get_jwt()
-    # CORRECCIÓN: 'tipo' -> 'rol'
     if claims.get('rol') != 'montador':
         return jsonify({"error": "Acceso no autorizado"}), 403
 
@@ -222,6 +216,7 @@ def finalizar_con_evidencia(trabajo_id):
         trabajo = Trabajo.query.filter_by(
             id=trabajo_id, montador_id=montador_id
         ).first()
+
         if not trabajo:
             return jsonify({"error": "Trabajo no encontrado"}), 404
         if trabajo.estado != 'aceptado':
@@ -251,11 +246,7 @@ def finalizar_con_evidencia(trabajo_id):
 @montador_bp.route('/montador/trabajo/<int:trabajo_id>/reportar-fallido', methods=['POST'])
 @jwt_required()
 def reportar_trabajo_fallido(trabajo_id):
-    """
-    Permite al montador cancelar un trabajo si el cliente no responde.
-    REEMBOLSA AUTOMÁTICAMENTE LAS GEMAS.
-    """
-    # CORRECCIÓN SEGURIDAD: Verificar rol
+    """Permite al montador cancelar un trabajo. Reembolsa gemas."""
     claims = get_jwt()
     if claims.get('rol') != 'montador':
         return jsonify({"error": "Acceso no autorizado"}), 403
@@ -270,15 +261,10 @@ def reportar_trabajo_fallido(trabajo_id):
         if trabajo.estado != 'aceptado':
             return jsonify({"error": "Solo se pueden cancelar trabajos activos"}), 400
 
-        # 1. Calcular cuánto pagó para devolverlo (si pagó)
         gemas_a_devolver = 0
-
-        # Solo devolvemos si el método era gemas
         if trabajo.metodo_pago == 'efectivo_gemas':
-            # Recálculo de seguridad del 10% teórico
             gemas_a_devolver = int(trabajo.precio_calculado * 0.10 * 10)
 
-        # 2. Reembolsar
         if gemas_a_devolver > 0:
             recargar_gemas(
                 wallet_id=trabajo.montador.wallet.id,
@@ -286,7 +272,6 @@ def reportar_trabajo_fallido(trabajo_id):
                 descripcion=f'Reembolso por trabajo fallido #{trabajo.id}'
             )
 
-        # 3. Actualizar estado del trabajo
         trabajo.estado = 'cancelado_incidencia'
         db.session.commit()
 
@@ -306,22 +291,48 @@ def reportar_trabajo_fallido(trabajo_id):
 @montador_bp.route('/montador/stripe-onboarding', methods=['POST'])
 @jwt_required()
 def montador_stripe_onboarding():
-    """Genera el enlace de onboarding para Stripe."""
+    """
+    Genera el enlace de onboarding para Stripe.
+    Crea la cuenta Express si no existe antes de crear el link.
+    """
     montador_id = get_jwt_identity()
-    montador = Montador.query.get(montador_id)
+
     try:
+        montador = Montador.query.get(montador_id)
+        if not montador:
+            return jsonify({"error": "Montador no encontrado"}), 404
+
+        # 1. SI NO TIENE CUENTA STRIPE, LA CREAMOS YA
+        if not montador.stripe_account_id:
+            print(f"⚠️ Creando cuenta Stripe para montador {montador.nombre}...")
+            account = stripe.Account.create(
+                type="express",
+                country="ES",
+                email=montador.email,
+                capabilities={
+                    "card_payments": {"requested": True},
+                    "transfers": {"requested": True},
+                },
+            )
+            montador.stripe_account_id = account.id
+            db.session.commit()
+            print(f"✅ Cuenta creada: {account.id}")
+
+        # 2. Generar Link
         account_link = stripe.AccountLink.create(
             account=montador.stripe_account_id,
-            refresh_url="http://localhost:3000/panel-montador",
-            return_url="http://localhost:3000/panel-montador?status=success",
+            refresh_url="https://kiq.es/panel-montador",
+            return_url="https://kiq.es/panel-montador?status=success",
             type="account_onboarding",
         )
         return jsonify({"url": account_link.url})
-    except stripe.error.StripeError as e:
+
+    except stripe.StripeError as e:
+        print(f"❌ Error Stripe: {e.user_message}")
         return jsonify({"error": f"Error de Stripe: {e.user_message}"}), 500
     except Exception as e: # pylint: disable=broad-exception-caught
-        print(f"Error general en montador_stripe_onboarding: {e}")
-        return jsonify({"error": str(e)}), 500
+        print(f"❌ Error general onboarding: {e}")
+        return jsonify({"error": "Error interno al conectar con Stripe"}), 500
 
 
 @montador_bp.route('/pagos/crear-sesion-gemas', methods=['POST'])
@@ -339,7 +350,7 @@ def crear_sesion_gemas():
         return jsonify({'error': 'Pack no válido'}), 400
 
     try:
-        base_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+        base_url = os.getenv('FRONTEND_URL', 'https://kiq.es')
         session = stripe.checkout.Session.create(
             payment_method_types=['card'],
             line_items=[{
@@ -358,14 +369,14 @@ def crear_sesion_gemas():
             cancel_url=f'{base_url}/panel-montador?compra_gemas=cancelado',
             metadata={
                 'montador_id': user_id,
-                'tipo_usuario': claims.get('rol'), # CORRECCIÓN: 'tipo' -> 'rol'
+                'tipo_usuario': claims.get('rol'),
                 'cantidad_gemas': pack['gems'],
                 'transaction_type': 'RECARGA'
             }
         )
         return jsonify({'url': session.url}), 200
 
-    except stripe.error.StripeError as e:
+    except stripe.StripeError as e:
         return jsonify({"error": f"Error de Stripe: {e.user_message}"}), 500
     except Exception as e: # pylint: disable=broad-exception-caught
         print(f"Error general en crear_sesion_gemas: {e}")

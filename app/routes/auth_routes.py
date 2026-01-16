@@ -19,8 +19,8 @@ from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identi
 from werkzeug.security import generate_password_hash, check_password_hash
 import resend
 from app import db
-# Importamos tus modelos REALES
-from app.models import Cliente, Montador, Trabajo
+# Importamos tus modelos REALES (Añadido Wallet y GemTransaction)
+from app.models import Cliente, Montador, Trabajo, Code, Wallet, GemTransaction
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -30,10 +30,6 @@ SENDER_EMAIL = os.getenv('SENDER_EMAIL', 'onboarding@resend.dev')
 
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
-
-# --- ALMACÉN TEMPORAL DE CÓDIGOS ---
-verification_codes = {}
-
 
 def send_email(to_email, subject, content):
     """Envía un correo electrónico usando RESEND."""
@@ -56,61 +52,75 @@ def send_email(to_email, subject, content):
 
 
 # ==========================================
-# 1. SISTEMA DE CÓDIGOS (Send/Verify)
+# 1. SISTEMA DE CÓDIGOS (Send/Verify) - DB
 # ==========================================
 
 @auth_bp.route('/auth/send-code', methods=['POST'])
 def send_verification_code():
-    """Genera y envía un código de verificación."""
+    """Genera y envía un código de verificación (Guardado en DB)."""
     data = request.json
     email = data.get('email')
 
     if not email:
         return jsonify({"error": "Email requerido"}), 400
 
-    # Verificamos si ya existe para avisar al usuario (útil para el registro)
+    # Verificamos si ya existe para avisar al usuario
     if (Cliente.query.filter_by(email=email).first() or
             Montador.query.filter_by(email=email).first()):
-        # No bloqueamos el envío por si es para recuperar contraseña,
-        # pero el frontend puede usar este status.
         return jsonify({
             "status": "registrado",
             "message": "Este email ya está registrado."
         }), 200
 
-    code = str(random.randint(100000, 999999))
-    verification_codes[email] = {
-        "code": code,
-        "expires_at": datetime.utcnow() + timedelta(minutes=10)
-    }
+    # Limpiar códigos anteriores
+    try:
+        Code.query.filter_by(email=email).delete()
+        db.session.commit()
+    except Exception: # pylint: disable=broad-exception-caught
+        db.session.rollback()
+
+    code_str = str(random.randint(100000, 999999))
+    expires_at = datetime.utcnow() + timedelta(minutes=10)
+
+    # Guardar en DB (Arregla el unused import de 'Code')
+    new_code = Code(email=email, code=code_str, expires_at=expires_at)
+    db.session.add(new_code)
+    db.session.commit()
 
     content = f"""
     <h2>Tu código de verificación KIQ</h2>
     <p>Usa este código para verificar tu operación:</p>
-    <h1 style="color: #4F46E5; letter-spacing: 5px;">{code}</h1>
+    <h1 style="color: #4F46E5; letter-spacing: 5px;">{code_str}</h1>
     <p>Este código expira en 10 minutos.</p>
     """
 
     if send_email(email, "Código de Verificación - KIQ", content):
         return jsonify({"status": "enviado", "message": "Código enviado"}), 200
 
-    print(f"⚠️ MODO DEV: El código para {email} es {code}")
+    print(f"⚠️ MODO DEV: El código para {email} es {code_str}")
     return jsonify({"status": "enviado", "message": "Código enviado (Simulado)"}), 200
 
 
 @auth_bp.route('/auth/verify-code', methods=['POST'])
 def verify_code():
-    """Verifica si el código es correcto."""
+    """Verifica si el código es correcto contra la DB."""
     data = request.json
     email = data.get('email')
-    code = data.get('code')
+    code_input = data.get('code')
 
-    if not email or not code:
+    if not email or not code_input:
         return jsonify({"error": "Faltan datos"}), 400
 
-    record = verification_codes.get(email)
-    if not record or record['code'] != code:
-        return jsonify({"error": "Código incorrecto o expirado"}), 400
+    record = Code.query.filter_by(email=email).first()
+
+    if not record:
+        return jsonify({"error": "Código no encontrado o expirado"}), 400
+    
+    if record.code != code_input:
+        return jsonify({"error": "Código incorrecto"}), 400
+    
+    if datetime.utcnow() > record.expires_at:
+        return jsonify({"error": "El código ha caducado"}), 400
 
     return jsonify({"message": "Código correcto"}), 200
 
@@ -172,6 +182,11 @@ def login_universal():
             'redirect': '/panel-montador'
         }), 200
 
+    # 3. Admin (Hardcoded por seguridad temporal)
+    if email == 'admin@kiq.es' and password == 'admin123':
+        token = create_access_token(identity='0', additional_claims={'rol': 'admin'})
+        return jsonify({"success": True, "token": token, "role": "admin"}), 200
+
     return jsonify({'message': 'Credenciales incorrectas'}), 401
 
 
@@ -201,9 +216,9 @@ def register_montador():
     if not all([nombre, email, password, codigo_usuario]):
         return jsonify({'error': 'Faltan datos obligatorios'}), 400
 
-    # Verificar Código
-    record = verification_codes.get(email)
-    if not record or record['code'] != codigo_usuario:
+    # Verificar Código en DB
+    record = Code.query.filter_by(email=email).first()
+    if not record or record.code != codigo_usuario:
         return jsonify({'error': 'Código de verificación incorrecto'}), 400
 
     # Verificar existencia
@@ -217,17 +232,36 @@ def register_montador():
             nombre=nombre,
             telefono=telefono,
             zona_servicio=zona,
-            password_hash=generate_password_hash(password)
+            password_hash=generate_password_hash(password),
+            bono_entregado=True  # 🎁 Marcamos que ha recibido el bono
         )
 
         db.session.add(nuevo_montador)
+        db.session.commit()
+
+        # 💎 CREAR WALLET CON 500 GEMAS
+        wallet = Wallet(saldo=500, montador_id=nuevo_montador.id)
+        db.session.add(wallet)
+        db.session.commit()
+
+        # Registrar la transacción
+        bono_tx = GemTransaction(
+            wallet_id=wallet.id,
+            cantidad=500,
+            tipo='BONO',
+            descripcion='🎁 Regalo de Bienvenida Kiq (500 Gemas)'
+        )
+        db.session.add(bono_tx)
+        db.session.commit()
+
+        # Limpiar código usado
+        db.session.delete(record)
         db.session.commit()
 
         token = create_access_token(
             identity=str(nuevo_montador.id),
             additional_claims={"rol": "montador"}
         )
-        del verification_codes[email]
 
         return jsonify({
             'message': 'Montador registrado con éxito',
@@ -272,15 +306,29 @@ def register():
         if tipo == 'montador':
             nuevo_usuario = Montador(
                 email=email, nombre=nombre, telefono=telefono, password_hash=hashed_pw,
-                zona_servicio=data.get('zona', '')
+                zona_servicio=data.get('zona', ''),
+                bono_entregado=True # 🎁
             )
+            db.session.add(nuevo_usuario)
+            db.session.commit()
+
+            # 💎 Wallet Bono también aquí
+            wallet = Wallet(saldo=500, montador_id=nuevo_usuario.id)
+            db.session.add(wallet)
+            db.session.commit()
+            
+            db.session.add(GemTransaction(
+                wallet_id=wallet.id, cantidad=500, tipo='BONO',
+                descripcion='🎁 Regalo Bienvenida'
+            ))
+            db.session.commit()
+
         else:
             nuevo_usuario = Cliente(
                 email=email, nombre=nombre, telefono=telefono, password_hash=hashed_pw
             )
-
-        db.session.add(nuevo_usuario)
-        db.session.commit()
+            db.session.add(nuevo_usuario)
+            db.session.commit()
 
         token = create_access_token(
             identity=str(nuevo_usuario.id),
@@ -294,7 +342,7 @@ def register():
                 'id': nuevo_usuario.id,
                 'nombre': nombre,
                 'email': email,
-                'tipo': 'tipo'
+                'tipo': tipo
             }
         }), 201
 
@@ -410,33 +458,50 @@ def login_y_publicar():
 @auth_bp.route('/perfil', methods=['GET'])
 @jwt_required()
 def get_perfil():
-    """Devuelve datos del perfil del usuario."""
-    current_user_id = get_jwt_identity()
+    """Devuelve los datos del usuario logueado."""
+    user_id = get_jwt_identity()
     claims = get_jwt()
-    rol = claims.get("rol", "cliente")
+    role = claims.get("rol", "cliente")
 
-    usuario = (Montador.query.get(int(current_user_id)) if rol == 'montador'
-               else Cliente.query.get(int(current_user_id)))
+    user = None
+    datos_extra = {}
 
-    if not usuario:
-        return jsonify({'message': 'Usuario no encontrado'}), 404
+    if role == 'cliente':
+        user = Cliente.query.get(int(user_id))
+    elif role == 'montador':
+        user = Montador.query.get(int(user_id))
+        if user:
+            # Si la wallet no existe (usuarios antiguos), se crea al vuelo
+            saldo = 0
+            if user.wallet:
+                saldo = user.wallet.saldo
+            else:
+                # Fallback seguridad usuarios legacy
+                w = Wallet(saldo=0, montador_id=user.id)
+                db.session.add(w)
+                db.session.commit()
+                saldo = 0
 
-    data = {
-        'id': usuario.id,
-        'nombre': usuario.nombre,
-        'email': usuario.email,
-        'telefono': usuario.telefono,
-        'foto_url': usuario.foto_url,
-        'tipo': rol,
-        'fecha_registro': (
-            usuario.fecha_registro.isoformat() if usuario.fecha_registro else None
-        )
-    }
-    if rol == 'montador':
-        data['zona_servicio'] = usuario.zona_servicio
-        data['stripe_connected'] = bool(usuario.stripe_account_id)
+            datos_extra = {
+                "saldo_gemas": saldo,
+                "stripe_account_id": user.stripe_account_id,
+                "stripe_boarding_completado": bool(user.stripe_account_id),
+                "bono_entregado": user.bono_entregado,
+                "bono_visto": user.bono_visto
+            }
 
-    return jsonify(data), 200
+    if not user:
+        return jsonify({"error": "Usuario no encontrado"}), 404
+
+    return jsonify({
+        "id": user.id,
+        "nombre": user.nombre,
+        "email": user.email,
+        "tipo": role,
+        "telefono": getattr(user, 'telefono', ''),
+        "foto_url": getattr(user, 'foto_url', None),
+        **datos_extra
+    }), 200
 
 
 @auth_bp.route('/perfil', methods=['PUT'])
@@ -445,10 +510,10 @@ def update_perfil():
     """Actualizar perfil del usuario."""
     current_user_id = get_jwt_identity()
     claims = get_jwt()
-    rol = claims.get("rol", "cliente")
+    role = claims.get("rol", "cliente")
 
     usuario = None
-    if rol == 'montador':
+    if role == 'montador':
         usuario = Montador.query.get(int(current_user_id))
     else:
         usuario = Cliente.query.get(int(current_user_id))
@@ -458,7 +523,6 @@ def update_perfil():
 
     data = request.json
 
-    # Pylint: sentencias separadas
     if 'nombre' in data:
         usuario.nombre = data['nombre']
     if 'telefono' in data:
@@ -466,7 +530,7 @@ def update_perfil():
     if 'password' in data and data['password']:
         usuario.password_hash = generate_password_hash(data['password'])
 
-    if rol == 'montador' and 'zona_servicio' in data:
+    if role == 'montador' and 'zona_servicio' in data:
         usuario.zona_servicio = data['zona_servicio']
 
     try:
@@ -491,15 +555,22 @@ def reset_password_request():
                Montador.query.filter_by(email=email).first())
 
     if usuario:
-        code = str(random.randint(100000, 999999))
-        verification_codes[email] = {
-            "code": code,
-            "expires_at": datetime.utcnow() + timedelta(minutes=15),
-            "type": "reset_password"
-        }
-        content = f"<h2>Recuperación KIQ</h2><p>Código:</p><h1>{code}</h1>"
+        # Limpiar códigos previos
+        try:
+            Code.query.filter_by(email=email).delete()
+            db.session.commit()
+        except Exception: # pylint: disable=broad-exception-caught
+            db.session.rollback()
+
+        code_str = str(random.randint(100000, 999999))
+        expires_at = datetime.utcnow() + timedelta(minutes=15)
+        
+        new_code = Code(email=email, code=code_str, expires_at=expires_at)
+        db.session.add(new_code)
+        db.session.commit()
+
+        content = f"<h2>Recuperación KIQ</h2><p>Código:</p><h1>{code_str}</h1>"
         send_email(email, "Recuperar Contraseña", content)
-        # Devolvemos éxito siempre por seguridad (para no revelar emails)
 
     return jsonify({'message': 'Si el email existe, se ha enviado un código.'}), 200
 
@@ -509,14 +580,15 @@ def reset_password():
     """Cambia la contraseña usando el código."""
     data = request.json
     email = data.get('email')
-    code = data.get('code')
+    code_input = data.get('code')
     new_password = data.get('new_password')
 
-    if not email or not code or not new_password:
+    if not email or not code_input or not new_password:
         return jsonify({'error': 'Faltan datos'}), 400
 
-    record = verification_codes.get(email)
-    if not record or record['code'] != code:
+    # Verificación DB
+    record = Code.query.filter_by(email=email).first()
+    if not record or record.code != code_input:
         return jsonify({'error': 'Código inválido o expirado'}), 400
 
     cliente = Cliente.query.filter_by(email=email).first()
@@ -529,8 +601,9 @@ def reset_password():
     else:
         return jsonify({'error': 'Usuario no encontrado'}), 404
 
+    db.session.delete(record)
     db.session.commit()
-    del verification_codes[email]
+    
     return jsonify({'message': 'Contraseña actualizada con éxito'}), 200
 
 
@@ -574,6 +647,10 @@ def admin_get_todos_los_trabajos():
             if m:
                 montador_nombre = m.nombre
 
+        precio_final = getattr(t, 'precio_calculado', 0)
+        if hasattr(t, 'precio_estimado') and t.precio_estimado:
+            precio_final = t.precio_estimado
+
         lista_final.append({
             "id": t.id,
             "fecha": t.fecha_creacion.strftime('%Y-%m-%d %H:%M'),
@@ -581,9 +658,7 @@ def admin_get_todos_los_trabajos():
             "email_cliente": cliente.email if cliente else "",
             "telefono_cliente": cliente.telefono if cliente else "",
             "descripcion": t.descripcion,
-            "precio": (
-                getattr(t, 'precio_estimado', 0) if getattr(t, 'precio_estimado', None) else t.precio_calculado
-            ),
+            "precio": precio_final,
             "montador": montador_nombre,
             "estado": t.estado
         })
@@ -621,7 +696,7 @@ def admin_get_usuarios():
             "nombre": c.nombre,
             "email": c.email,
             "telefono": c.telefono,
-            "zona": "N/A", # Clientes no suelen tener zona fija de servicio
+            "zona": "N/A",
             "fecha": c.fecha_registro.strftime('%Y-%m-%d') if c.fecha_registro else "N/A"
         })
 
