@@ -159,7 +159,9 @@ def get_mis_compras():
     """Devuelve la lista de cosas que he comprado."""
     user_id = int(get_jwt_identity())
     claims = get_jwt()
-    if claims.get('tipo') != 'cliente':
+    
+    # CORREGIDO: Usamos 'rol' en lugar de 'tipo'
+    if claims.get('rol') != 'cliente':
         return jsonify({"error": "Solo clientes compran"}), 403
 
     try:
@@ -170,20 +172,20 @@ def get_mis_compras():
         for o in ordenes:
             # Obtenemos datos frescos del producto
             prod = Product.query.get(o.product_id)
-
-            res.append({
-                "order_id": o.id,
-                "fecha": o.created_at.isoformat(),
-                "estado_pedido": o.estado,
-                "total": o.total,
-                "metodo_pago": o.metodo_pago,
-                "producto": {
-                    "id": prod.id,
-                    "titulo": prod.titulo,
-                    "imagen": prod.imagenes_urls[0] if prod.imagenes_urls else None,
-                    "ubicacion": prod.ubicacion
-                }
-            })
+            if prod: # Protección por si el producto se borró
+                res.append({
+                    "order_id": o.id,
+                    "fecha": o.created_at.isoformat(),
+                    "estado_pedido": o.estado,
+                    "total": o.total,
+                    "metodo_pago": o.metodo_pago,
+                    "producto": {
+                        "id": prod.id,
+                        "titulo": prod.titulo,
+                        "imagen": prod.imagenes_urls[0] if prod.imagenes_urls else None,
+                        "ubicacion": prod.ubicacion
+                    }
+                })
         return jsonify(res), 200
     except Exception as e: # pylint: disable=broad-exception-caught
         print(f"Error listando compras: {e}")
@@ -200,9 +202,11 @@ def get_mis_ventas():
     """
     user_id = int(get_jwt_identity())
     claims = get_jwt()
-    tipo = claims.get('tipo')
+    
+    # CORREGIDO: Usamos 'rol' en lugar de 'tipo'
+    rol = claims.get('rol')
 
-    if tipo != 'montador':
+    if rol != 'montador':
         return jsonify({"error": "Solo montadores tienen ventas"}), 403
 
     try:
@@ -216,22 +220,23 @@ def get_mis_ventas():
             prod = Product.query.get(v.product_id)
             comprador = Cliente.query.get(v.comprador_id)
 
-            res.append({
-                "order_id": v.id,
-                "fecha": v.created_at.isoformat(),
-                "estado_pedido": v.estado, # 'pagado', 'pendiente_pago', 'entregado'
-                "total": v.total,
-                "metodo_pago": v.metodo_pago,
-                "producto": {
-                    "id": prod.id,
-                    "titulo": prod.titulo,
-                    "imagen": prod.imagenes_urls[0] if prod.imagenes_urls else None
-                },
-                "comprador": {
-                    "nombre": comprador.nombre,
-                    "id": comprador.id
-                }
-            })
+            if prod and comprador: # Protección de datos nulos
+                res.append({
+                    "order_id": v.id,
+                    "fecha": v.created_at.isoformat(),
+                    "estado_pedido": v.estado, # 'pagado', 'pendiente_pago', 'entregado'
+                    "total": v.total,
+                    "metodo_pago": v.metodo_pago,
+                    "producto": {
+                        "id": prod.id,
+                        "titulo": prod.titulo,
+                        "imagen": prod.imagenes_urls[0] if prod.imagenes_urls else None
+                    },
+                    "comprador": {
+                        "nombre": comprador.nombre,
+                        "id": comprador.id
+                    }
+                })
         return jsonify(res), 200
 
     except Exception as e: # pylint: disable=broad-exception-caught
