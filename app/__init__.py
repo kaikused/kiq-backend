@@ -81,6 +81,17 @@ def create_app():
                     print("✅ DB Patch: Columna 'direccion' añadida a 'clientes'.")
                 except Exception: # pylint: disable=broad-exception-caught
                     pass
+
+                # Intento 3: Tabla 'montador' (CORRECCIÓN ERROR ACTUAL)
+                try:
+                    # Añadir columna bono_entregado
+                    conn.execute(text("ALTER TABLE montador ADD COLUMN IF NOT EXISTS bono_entregado BOOLEAN DEFAULT FALSE"))
+                    # Añadir columna bono_visto
+                    conn.execute(text("ALTER TABLE montador ADD COLUMN IF NOT EXISTS bono_visto BOOLEAN DEFAULT FALSE"))
+                    conn.commit()
+                    print("✅ DB Patch: Columnas 'bono_entregado' y 'bono_visto' añadidas a 'montador'.")
+                except Exception as e: # pylint: disable=broad-exception-caught
+                    print(f"⚠️ Nota Patch Montador: {e}")
                     
         except Exception as e:  # pylint: disable=broad-exception-caught
             print(f"⚠️ Error leve en DB Patch: {e}")
