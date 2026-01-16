@@ -11,45 +11,20 @@ Maneja:
 8. Verificación de Códigos
 """
 import random
-import os
 from datetime import datetime, timedelta
 # pylint: disable=no-name-in-module
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from werkzeug.security import generate_password_hash, check_password_hash
-import resend
+
 from app import db
-# Importamos tus modelos REALES (Añadido Wallet y GemTransaction)
-from app.models import Cliente, Montador, Trabajo, Code, Wallet, GemTransaction
+# Importamos tus modelos REALES (Quitamos Wallet y GemTransaction porque usamos el servicio)
+from app.models import Cliente, Montador, Trabajo, Code
+# IMPORTAMOS LOS SERVICIOS ROBUSTOS
+from app.email_service import enviar_codigo_verificacion, enviar_email_generico
+from app.gems_service import asignar_bono_bienvenida
 
 auth_bp = Blueprint('auth', __name__)
-
-# --- CONFIGURACIÓN EMAIL (RESEND) ---
-RESEND_API_KEY = os.getenv('RESEND_API_KEY')
-SENDER_EMAIL = os.getenv('SENDER_EMAIL', 'onboarding@resend.dev')
-
-if RESEND_API_KEY:
-    resend.api_key = RESEND_API_KEY
-
-def send_email(to_email, subject, content):
-    """Envía un correo electrónico usando RESEND."""
-    if not RESEND_API_KEY:
-        print("⚠️ Resend API Key no configurada.")
-        return False
-
-    try:
-        params = {
-            "from": SENDER_EMAIL,
-            "to": [to_email],
-            "subject": subject,
-            "html": content,
-        }
-        resend.Emails.send(params)
-        return True
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        print(f"❌ Error enviando email: {e}")
-        return False
-
 
 # ==========================================
 # 1. SISTEMA DE CÓDIGOS (Send/Verify) - DB
@@ -82,23 +57,16 @@ def send_verification_code():
     code_str = str(random.randint(100000, 999999))
     expires_at = datetime.utcnow() + timedelta(minutes=10)
 
-    # Guardar en DB (Arregla el unused import de 'Code')
+    # Guardar en DB
     new_code = Code(email=email, code=code_str, expires_at=expires_at)
     db.session.add(new_code)
     db.session.commit()
 
-    content = f"""
-    <h2>Tu código de verificación KIQ</h2>
-    <p>Usa este código para verificar tu operación:</p>
-    <h1 style="color: #4F46E5; letter-spacing: 5px;">{code_str}</h1>
-    <p>Este código expira en 10 minutos.</p>
-    """
-
-    if send_email(email, "Código de Verificación - KIQ", content):
+    # USAMOS EL SERVICIO CENTRALIZADO 📧
+    if enviar_codigo_verificacion(email, code_str):
         return jsonify({"status": "enviado", "message": "Código enviado"}), 200
 
-    print(f"⚠️ MODO DEV: El código para {email} es {code_str}")
-    return jsonify({"status": "enviado", "message": "Código enviado (Simulado)"}), 200
+    return jsonify({"status": "error", "message": "No se pudo enviar el email"}), 500
 
 
 @auth_bp.route('/auth/verify-code', methods=['POST'])
@@ -227,6 +195,7 @@ def register_montador():
         return jsonify({'error': 'El usuario ya existe'}), 400
 
     try:
+        # 1. Crear el Montador
         nuevo_montador = Montador(
             email=email,
             nombre=nombre,
@@ -237,24 +206,14 @@ def register_montador():
         )
 
         db.session.add(nuevo_montador)
+        # Hacemos commit AQUÍ para asegurar que tenemos el ID
         db.session.commit()
 
-        # 💎 CREAR WALLET CON 500 GEMAS
-        wallet = Wallet(saldo=500, montador_id=nuevo_montador.id)
-        db.session.add(wallet)
-        db.session.commit()
+        # 2. ASIGNAR BONO DE FORMA ROBUSTA (Delegado al servicio)
+        # Esto crea la wallet si no existe y asigna las gemas con seguridad
+        asignar_bono_bienvenida(nuevo_montador.id, 'montador')
 
-        # Registrar la transacción
-        bono_tx = GemTransaction(
-            wallet_id=wallet.id,
-            cantidad=500,
-            tipo='BONO',
-            descripcion='🎁 Regalo de Bienvenida Kiq (500 Gemas)'
-        )
-        db.session.add(bono_tx)
-        db.session.commit()
-
-        # Limpiar código usado
+        # 3. Limpiar código usado
         db.session.delete(record)
         db.session.commit()
 
@@ -310,18 +269,10 @@ def register():
                 bono_entregado=True # 🎁
             )
             db.session.add(nuevo_usuario)
-            db.session.commit()
+            db.session.commit() # Commit para tener ID
 
-            # 💎 Wallet Bono también aquí
-            wallet = Wallet(saldo=500, montador_id=nuevo_usuario.id)
-            db.session.add(wallet)
-            db.session.commit()
-            
-            db.session.add(GemTransaction(
-                wallet_id=wallet.id, cantidad=500, tipo='BONO',
-                descripcion='🎁 Regalo Bienvenida'
-            ))
-            db.session.commit()
+            # ASIGNAR BONO ROBUSTO
+            asignar_bono_bienvenida(nuevo_usuario.id, 'montador')
 
         else:
             nuevo_usuario = Cliente(
@@ -397,10 +348,11 @@ def publicar_y_registrar():
             additional_claims={"rol": "cliente"}
         )
 
-        send_email(
+        # USAMOS EMAIL GENÉRICO 📧
+        enviar_email_generico(
             email,
             "Bienvenido a KIQ",
-            f"<h1>Hola {nombre}</h1><p>Presupuesto creado.</p>"
+            f"<h1>Hola {nombre}</h1><p>Tu cuenta y tu presupuesto han sido creados correctamente.</p>"
         )
 
         return jsonify({
@@ -472,11 +424,13 @@ def get_perfil():
         user = Montador.query.get(int(user_id))
         if user:
             # Si la wallet no existe (usuarios antiguos), se crea al vuelo
+            # NOTA: Aunque el registro ahora es robusto, mantenemos esto para usuarios legacy.
             saldo = 0
             if user.wallet:
                 saldo = user.wallet.saldo
             else:
-                # Fallback seguridad usuarios legacy
+                # Fallback seguridad usuarios legacy (No damos bono, solo creamos wallet vacía)
+                from app.models import Wallet # Import local para evitar circular si fuera necesario
                 w = Wallet(saldo=0, montador_id=user.id)
                 db.session.add(w)
                 db.session.commit()
@@ -569,9 +523,16 @@ def reset_password_request():
         db.session.add(new_code)
         db.session.commit()
 
-        content = f"<h2>Recuperación KIQ</h2><p>Código:</p><h1>{code_str}</h1>"
-        send_email(email, "Recuperar Contraseña", content)
+        content = f"""
+        <h2>Recuperación KIQ</h2>
+        <p>Has solicitado restablecer tu contraseña.</p>
+        <p>Tu código de seguridad es:</p>
+        <h1 style="color: #6d28d9; letter-spacing: 5px;">{code_str}</h1>
+        """
+        # USAMOS EMAIL GENÉRICO 📧
+        enviar_email_generico(email, "Recuperar Contraseña - KIQ", content)
 
+    # Respondemos siempre 200 por seguridad (para no revelar qué emails existen)
     return jsonify({'message': 'Si el email existe, se ha enviado un código.'}), 200
 
 

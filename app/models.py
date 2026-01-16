@@ -5,6 +5,7 @@ Incluye Link, Cliente, Trabajo, Montador, Sistema de Gemas, Verificación, PRODU
 from datetime import datetime
 import random
 from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy import UniqueConstraint # <--- IMPORTANTE
 # Imports locales
 from .extensions import db
 
@@ -72,10 +73,16 @@ class GemTransaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     wallet_id = db.Column(db.Integer, db.ForeignKey('wallet.id'), nullable=False)
     cantidad = db.Column(db.Integer, nullable=False)
-    tipo = db.Column(db.String(50), nullable=False)
+    tipo = db.Column(db.String(50), nullable=False) # 'BONO_REGISTRO', 'PAGO_SERVICIO', etc.
     descripcion = db.Column(db.String(200), nullable=True)
     fecha = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     trabajo_id = db.Column(db.Integer, db.ForeignKey('trabajo.id'), nullable=True)
+
+    # RESTRICCIÓN DE SEGURIDAD: Evita doble bono.
+    # Solo puede haber una transacción de tipo 'BONO_REGISTRO' por wallet.
+    __table_args__ = (
+        UniqueConstraint('wallet_id', 'tipo', name='uq_wallet_tipo_bono'),
+    )
 
     def __repr__(self):
         return f"<GemTx {self.cantidad} | {self.tipo}>"

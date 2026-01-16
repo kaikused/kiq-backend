@@ -1,6 +1,10 @@
+"""
+Script de mantenimiento para crear la tabla 'product' (Kiq Outlet).
+Define la estructura para la compra-venta de muebles con seguridad de propietario.
+"""
+from sqlalchemy import text
 from app import create_app
 from app.extensions import db
-from sqlalchemy import text
 
 app = create_app()
 
@@ -8,7 +12,8 @@ with app.app_context():
     print("🏗️  Creando la tabla de Productos (Kiq Outlet)...")
     
     # Definimos la tabla SQL con lógica polimórfica (Cliente O Montador)
-    sql = """
+    # Incluimos payment_intent_id y metodo_pago para que nazca completa.
+    SQL_COMMAND = """
     CREATE TABLE IF NOT EXISTS product (
         id SERIAL PRIMARY KEY,
         
@@ -21,8 +26,10 @@ with app.app_context():
         estado VARCHAR(50) DEFAULT 'disponible', 
         imagenes_urls JSON, 
         
-        -- Ubicación (Clave para el Feed)
+        -- Pagos y Logística
         ubicacion VARCHAR(200),
+        payment_intent_id VARCHAR(100),
+        metodo_pago VARCHAR(20) DEFAULT 'stripe',
         
         -- Auditoría
         fecha_creacion TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
@@ -41,9 +48,9 @@ with app.app_context():
     """
     
     try:
-        db.session.execute(text(sql))
+        db.session.execute(text(SQL_COMMAND))
         db.session.commit()
         print("✅ ¡Tabla 'product' creada con éxito!")
         print("   Ahora tanto Clientes como Montadores pueden publicar cosas.")
-    except Exception as e:
+    except Exception as e: # pylint: disable=broad-exception-caught
         print(f"❌ Error: {e}")
