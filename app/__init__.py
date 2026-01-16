@@ -22,6 +22,7 @@ from .routes.public_routes import public_bp
 
 from .webhooks import webhooks_bp
 
+
 def create_app():
     """Crea la app Flask."""
     load_dotenv()
@@ -48,7 +49,9 @@ def create_app():
 
     # --- CREDENCIALES GOOGLE (Vision AI) ---
     try:
-        credentials_path = os.path.join(app.root_path, '..', 'google-credentials.json')
+        credentials_path = os.path.join(
+            app.root_path, '..', 'google-credentials.json'
+        )
         if os.getenv('GOOGLE_CREDENTIALS_JSON'):
             with open(credentials_path, 'w', encoding='utf-8') as f:
                 f.write(os.getenv('GOOGLE_CREDENTIALS_JSON'))
@@ -61,40 +64,49 @@ def create_app():
     # --- INICIALIZAR EXTENSIONES ---
     db.init_app(app)
 
-    # 🚑 PARCHE DE EMERGENCIA DB (Auto-Fix Columnas Faltantes) 🚑
+    # 🚑 PARCHE DE AUTO-REPARACIÓN DE BASE DE DATOS (ALL-IN-ONE) 🚑
     with app.app_context():
         try:
             db.create_all()
             with db.engine.connect() as conn:
-                # Intento 1: Tabla 'cliente' (según logs de error)
+                print("🔧 Verificando integridad de la Base de Datos...")
+
+                # 1. ARREGLAR TABLA CLIENTES (Dirección)
                 try:
-                    conn.execute(text("ALTER TABLE cliente ADD COLUMN IF NOT EXISTS direccion VARCHAR(200)"))
+                    conn.execute(text(
+                        "ALTER TABLE cliente ADD COLUMN IF NOT EXISTS direccion VARCHAR(200)"
+                    ))
                     conn.commit()
-                    print("✅ DB Patch: Columna 'direccion' añadida a 'cliente'.")
-                except Exception: # pylint: disable=broad-exception-caught
-                    pass
-                
-                # Intento 2: Tabla 'clientes' (según modelo actual)
-                try:
-                    conn.execute(text("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS direccion VARCHAR(200)"))
-                    conn.commit()
-                    print("✅ DB Patch: Columna 'direccion' añadida a 'clientes'.")
-                except Exception: # pylint: disable=broad-exception-caught
+                except Exception:  # pylint: disable=broad-exception-caught
                     pass
 
-                # Intento 3: Tabla 'montador' (CORRECCIÓN ERROR ACTUAL)
+                # 2. ARREGLAR TABLA MONTADORES (Bonos)
                 try:
-                    # Añadir columna bono_entregado
-                    conn.execute(text("ALTER TABLE montador ADD COLUMN IF NOT EXISTS bono_entregado BOOLEAN DEFAULT FALSE"))
-                    # Añadir columna bono_visto
-                    conn.execute(text("ALTER TABLE montador ADD COLUMN IF NOT EXISTS bono_visto BOOLEAN DEFAULT FALSE"))
+                    conn.execute(text(
+                        "ALTER TABLE montador ADD COLUMN IF NOT EXISTS "
+                        "bono_entregado BOOLEAN DEFAULT FALSE"
+                    ))
+                    conn.execute(text(
+                        "ALTER TABLE montador ADD COLUMN IF NOT EXISTS "
+                        "bono_visto BOOLEAN DEFAULT FALSE"
+                    ))
                     conn.commit()
-                    print("✅ DB Patch: Columnas 'bono_entregado' y 'bono_visto' añadidas a 'montador'.")
-                except Exception as e: # pylint: disable=broad-exception-caught
-                    print(f"⚠️ Nota Patch Montador: {e}")
-                    
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
+
+                # 3. ARREGLAR TABLA TRABAJOS (Precio Estimado)
+                try:
+                    conn.execute(text(
+                        "ALTER TABLE trabajo ADD COLUMN IF NOT EXISTS precio_estimado FLOAT"
+                    ))
+                    conn.commit()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
+
+                print("✅ DB Patch: Todas las columnas verificadas.")
+
         except Exception as e:  # pylint: disable=broad-exception-caught
-            print(f"⚠️ Error leve en DB Patch: {e}")
+            print(f"⚠️ Nota DB Patch: {e}")
     # ----------------------------------------------------
 
     # --- CONFIGURACIÓN CORS ---
