@@ -9,7 +9,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.models import Cliente, Trabajo, Montador, GemTransaction
+from app.models import Cliente, Trabajo, Montador
 from app.extensions import db
 from app.storage import upload_image_to_gcs
 from app.gems_service import recargar_gemas
@@ -32,6 +32,11 @@ def get_trabajos_disponibles():
     Obtiene trabajos pendientes y sin asignar.
     🔒 FILTRO DE PRIVACIDAD ACTIVADO: No envía teléfonos ni direcciones exactas.
     """
+    # CORRECCIÓN SEGURIDAD: Verificar rol
+    claims = get_jwt()
+    if claims.get('rol') != 'montador':
+        return jsonify({"error": "Acceso no autorizado"}), 403
+
     try:
         trabajos = Trabajo.query.filter_by(
             estado='pendiente', montador_id=None
@@ -50,7 +55,8 @@ def get_trabajos_disponibles():
 
             # 🔒 ENMASCARAR DIRECCIÓN (Para evitar puenteo)
             # Mostramos solo una referencia vaga, no la exacta.
-            direccion_oculta = "📍 Zona de " + (t.direccion.split(',')[0] if t.direccion else "Málaga")
+            zona_ref = t.direccion.split(',')[0] if t.direccion else "Málaga"
+            direccion_oculta = f"📍 Zona de {zona_ref}"
 
             res.append({
                 "trabajo_id": t.id,
@@ -79,15 +85,20 @@ def get_mis_trabajos_montador():
     Obtiene los trabajos asignados al montador.
     🔓 ACCESO TOTAL: Aquí SÍ enviamos el teléfono y dirección exacta.
     """
-    montador_id = get_jwt_identity()
+    # CORRECCIÓN SEGURIDAD: Verificar rol
+    claims = get_jwt()
+    if claims.get('rol') != 'montador':
+        return jsonify({"error": "Acceso no autorizado"}), 403
+
     try:
+        montador_id = int(get_jwt_identity())
         trabajos = Trabajo.query.filter_by(montador_id=montador_id).order_by(
             Trabajo.fecha_creacion.desc()
         ).all()
         res = []
         for t in trabajos:
             c = Cliente.query.get(t.cliente_id)
-            
+
             # Manejo de desglose
             desglose_data = t.desglose
             if isinstance(desglose_data, str):
@@ -102,7 +113,8 @@ def get_mis_trabajos_montador():
                 cliente_info = {
                     "nombre": c.nombre,
                     "foto_url": c.foto_url,
-                    "telefono": c.telefono # <--- 🔓 DATO LIBERADO: El montador ya puede ver el número
+                    # 🔓 DATO LIBERADO: El montador ya puede ver el número
+                    "telefono": c.telefono
                 }
 
             res.append({
@@ -130,9 +142,13 @@ def aceptar_trabajo(trabajo_id):
     El montador acepta un trabajo disponible.
     Si es pago en efectivo, se cobra la comisión en Gemas aquí.
     """
-    montador_id = int(get_jwt_identity())
+    # CORRECCIÓN SEGURIDAD: Verificar rol
+    claims = get_jwt()
+    if claims.get('rol') != 'montador':
+        return jsonify({"error": "Acceso no autorizado"}), 403
 
     try:
+        montador_id = int(get_jwt_identity())
         montador = Montador.query.get(montador_id)
         trabajo = Trabajo.query.get(trabajo_id)
 
@@ -165,14 +181,13 @@ def aceptar_trabajo(trabajo_id):
         trabajo.estado = 'aceptado'
         db.session.commit()
 
-        # Opcional: Podríamos devolver el teléfono aquí mismo en la respuesta
-        # para que el frontend lo muestre al instante sin recargar.
+        # Opcional: Devolver el teléfono al instante sin recargar.
         cliente_telf = trabajo.cliente.telefono if trabajo.cliente else None
 
         return jsonify({
             "success": True,
             "message": "¡Trabajo aceptado! Contacta con el cliente.",
-            "datos_contacto": { "telefono": cliente_telf } # <--- EXTRA: Enviamos el dato al instante
+            "datos_contacto": {"telefono": cliente_telf}
         }), 200
 
     except SQLAlchemyError as e:
@@ -191,8 +206,10 @@ def aceptar_trabajo(trabajo_id):
 def finalizar_con_evidencia(trabajo_id):
     """Sube evidencia y finaliza el trabajo."""
     claims = get_jwt()
-    if claims.get('tipo') != 'montador':
+    # CORRECCIÓN: 'tipo' -> 'rol'
+    if claims.get('rol') != 'montador':
         return jsonify({"error": "Acceso no autorizado"}), 403
+
     montador_id = int(get_jwt_identity())
 
     if 'imagen' not in request.files:
@@ -238,9 +255,13 @@ def reportar_trabajo_fallido(trabajo_id):
     Permite al montador cancelar un trabajo si el cliente no responde.
     REEMBOLSA AUTOMÁTICAMENTE LAS GEMAS.
     """
-    montador_id = int(get_jwt_identity())
+    # CORRECCIÓN SEGURIDAD: Verificar rol
+    claims = get_jwt()
+    if claims.get('rol') != 'montador':
+        return jsonify({"error": "Acceso no autorizado"}), 403
 
     try:
+        montador_id = int(get_jwt_identity())
         trabajo = Trabajo.query.filter_by(id=trabajo_id, montador_id=montador_id).first()
 
         if not trabajo:
@@ -254,18 +275,7 @@ def reportar_trabajo_fallido(trabajo_id):
 
         # Solo devolvemos si el método era gemas
         if trabajo.metodo_pago == 'efectivo_gemas':
-            # Buscamos en el historial si hubo un pago para este trabajo
-            tx_pago = GemTransaction.query.filter_by(
-                wallet_id=trabajo.montador.wallet.id,
-                trabajo_id=trabajo.id,
-                tipo='PAGO_SERVICIO' # Ojo: Asegúrate que el tipo coincida con el grabado al pagar
-            ).first()
-
-            # NOTA: En aceptar_trabajo no grabamos explicitamente 'PAGO_SERVICIO' con trabajo_id
-            # en la versión simple. Si no encuentras la transacción exacta, 
-            # recalculamos el 10% teórico para devolverlo.
-            
-            # Recálculo de seguridad:
+            # Recálculo de seguridad del 10% teórico
             gemas_a_devolver = int(trabajo.precio_calculado * 0.10 * 10)
 
         # 2. Reembolsar
@@ -348,7 +358,7 @@ def crear_sesion_gemas():
             cancel_url=f'{base_url}/panel-montador?compra_gemas=cancelado',
             metadata={
                 'montador_id': user_id,
-                'tipo_usuario': claims.get('tipo'),
+                'tipo_usuario': claims.get('rol'), # CORRECCIÓN: 'tipo' -> 'rol'
                 'cantidad_gemas': pack['gems'],
                 'transaction_type': 'RECARGA'
             }
