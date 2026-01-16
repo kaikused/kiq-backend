@@ -6,6 +6,7 @@ import os
 from flask import Flask
 from dotenv import load_dotenv
 import stripe
+from sqlalchemy import text
 
 # Importamos las extensiones
 from .extensions import db, cors, jwt, migrate
@@ -61,20 +62,35 @@ def create_app():
     # --- INICIALIZAR EXTENSIONES ---
     db.init_app(app)
 
+    # 🚑 PARCHE DE AUTO-REPARACIÓN DE BASE DE DATOS 🚑
+    with app.app_context():
+        try:
+            db.create_all()
+            # Intenta añadir la columna 'direccion' a 'clientes' si falta
+            with db.engine.connect() as conn:
+                query = text(
+                    "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS direccion VARCHAR(200);"
+                )
+                conn.execute(query)
+                conn.commit()
+                print("✅ DB Patch: Columna 'direccion' verificada en clientes.")
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            print(f"⚠️ Nota DB Patch: {e}")
+    # ----------------------------------------------------
+
     # --- CONFIGURACIÓN CORS (CORREGIDA) ---
-    # Permitimos acceso total desde tu dominio real y localhost
-    # supports_credentials=True es el estándar para permitir cookies/tokens seguros
-    # SE HA AÑADIDO "Cache-Control" A LA LISTA DE HEADERS PERMITIDOS
     cors.init_app(app, resources={r"/*": {
         "origins": [
             "https://kiq.es",
             "https://www.kiq.es",
-            "https://kiq-nextjs-tailwind.vercel.app",  
+            "https://kiq-nextjs-tailwind.vercel.app",
             "http://localhost:3000",
             "http://localhost:3001"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Cache-Control"],
+        "allow_headers": [
+            "Content-Type", "Authorization", "X-Requested-With", "Cache-Control"
+        ],
         "supports_credentials": True
     }})
     # -------------------------------------
