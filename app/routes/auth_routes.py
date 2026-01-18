@@ -646,15 +646,19 @@ def admin_get_todos_los_trabajos():
 @auth_bp.route('/admin/usuarios', methods=['GET'])
 def admin_get_usuarios():
     """Obtiene lista combinada de Clientes y Montadores para el Admin."""
-    # Validación Estándar Bearer Token
     if not _validar_admin_token():
         return jsonify({'error': 'Acceso denegado. Token inválido.'}), 401
 
     lista_usuarios = []
 
-    # 1. Obtener Montadores
+    # 1. Obtener Montadores y sus Gemas
     montadores = Montador.query.all()
     for m in montadores:
+        # Calcular saldo seguro
+        saldo_actual = 0
+        if m.wallet:
+            saldo_actual = m.wallet.saldo
+            
         lista_usuarios.append({
             "id": m.id,
             "tipo": "montador",
@@ -662,6 +666,7 @@ def admin_get_usuarios():
             "email": m.email,
             "telefono": m.telefono,
             "zona": m.zona_servicio,
+            "saldo": saldo_actual,  # <--- ¡AQUÍ ESTÁ LA CLAVE!
             "fecha": m.fecha_registro.strftime('%Y-%m-%d') if m.fecha_registro else "N/A"
         })
 
@@ -675,6 +680,7 @@ def admin_get_usuarios():
             "email": c.email,
             "telefono": c.telefono,
             "zona": "N/A",
+            "saldo": 0, # Clientes no tienen gemas
             "fecha": c.fecha_registro.strftime('%Y-%m-%d') if c.fecha_registro else "N/A"
         })
 
