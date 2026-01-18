@@ -12,7 +12,7 @@ Maneja:
 9. Subida de Foto de Perfil
 """
 import random
-import os  # ✅ NECESARIO para leer variables de entorno
+import os   # ✅ NECESARIO para leer variables de entorno
 from datetime import datetime, timedelta
 # pylint: disable=no-name-in-module
 from flask import Blueprint, request, jsonify
@@ -20,12 +20,14 @@ from flask_cors import cross_origin
 import cloudinary           # ✅ NECESARIO para configurar
 import cloudinary.uploader
 
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
+from flask_jwt_extended import (
+    create_access_token, jwt_required, get_jwt_identity, get_jwt
+)
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from app import db
-# Importamos tus modelos REALES
-from app.models import Cliente, Montador, Trabajo, Code
+# Importamos tus modelos REALES (Agregado Wallet aquí para evitar C0415)
+from app.models import Cliente, Montador, Trabajo, Code, Wallet
 # IMPORTAMOS LOS SERVICIOS ROBUSTOS
 from app.email_service import enviar_codigo_verificacion, enviar_email_generico
 from app.gems_service import asignar_bono_bienvenida
@@ -33,11 +35,11 @@ from app.gems_service import asignar_bono_bienvenida
 # ==========================================
 # 0. CONFIGURACIÓN CLOUDINARY (Integrada)
 # ==========================================
-cloudinary.config( 
-  cloud_name = os.getenv('CLOUDINARY_CLOUD_NAME'), 
-  api_key = os.getenv('CLOUDINARY_API_KEY'), 
-  api_secret = os.getenv('CLOUDINARY_API_SECRET'),
-  secure = True
+cloudinary.config(
+  cloud_name=os.getenv('CLOUDINARY_CLOUD_NAME'),
+  api_key=os.getenv('CLOUDINARY_API_KEY'),
+  api_secret=os.getenv('CLOUDINARY_API_SECRET'),
+  secure=True
 )
 
 auth_bp = Blueprint('auth', __name__)
@@ -99,10 +101,10 @@ def verify_code():
 
     if not record:
         return jsonify({"error": "Código no encontrado o expirado"}), 400
-    
+
     if record.code != code_input:
         return jsonify({"error": "Código incorrecto"}), 400
-    
+
     if datetime.utcnow() > record.expires_at:
         return jsonify({"error": "El código ha caducado"}), 400
 
@@ -446,7 +448,6 @@ def get_perfil():
                 saldo = user.wallet.saldo
             else:
                 # Fallback seguridad usuarios legacy (No damos bono, solo creamos wallet vacía)
-                from app.models import Wallet # Import local para evitar circular si fuera necesario
                 w = Wallet(saldo=0, montador_id=user.id)
                 db.session.add(w)
                 db.session.commit()
@@ -534,7 +535,7 @@ def reset_password_request():
 
         code_str = str(random.randint(100000, 999999))
         expires_at = datetime.utcnow() + timedelta(minutes=15)
-        
+
         new_code = Code(email=email, code=code_str, expires_at=expires_at)
         db.session.add(new_code)
         db.session.commit()
@@ -580,7 +581,7 @@ def reset_password():
 
     db.session.delete(record)
     db.session.commit()
-    
+
     return jsonify({'message': 'Contraseña actualizada con éxito'}), 200
 
 
@@ -598,7 +599,7 @@ def check_email():
     return jsonify({"status": "nuevo"}), 200
 
 def _validar_admin_token():
-    """Función auxiliar para validar la cabecera estándar Bearer."""
+    """Función auxiliar para validar la cabecera estándar Bearer del Admin."""
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith("Bearer "):
         return False
@@ -687,6 +688,7 @@ def admin_get_usuarios():
 @cross_origin() # Soluciona el error de CORS bloqueado
 @jwt_required()
 def subir_foto_perfil():
+    """Endpoint para actualizar la foto de perfil en Cloudinary."""
     # 1. Responder OK al navegador si pregunta por permisos (OPTIONS)
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'}), 200
@@ -694,7 +696,7 @@ def subir_foto_perfil():
     # 2. Validar que llega un archivo
     if 'imagen' not in request.files:
         return jsonify({'error': 'No se envió ninguna imagen'}), 400
-    
+
     file = request.files['imagen']
     if file.filename == '':
         return jsonify({'error': 'Nombre de archivo vacío'}), 400
@@ -715,14 +717,106 @@ def subir_foto_perfil():
             user = Montador.query.get(int(user_id))
         else:
             user = Cliente.query.get(int(user_id))
-        
+
         if user:
             user.foto_url = url_imagen
             db.session.commit()
             return jsonify({'message': 'Foto actualizada', 'foto_url': url_imagen}), 200
-        else:
-            return jsonify({'error': 'Usuario no encontrado'}), 404
 
-    except Exception as e:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+
+    except Exception as e:  # pylint: disable=broad-exception-caught
         print(f"❌ Error subida foto: {e}")
         return jsonify({'error': 'Falló la subida de la imagen'}), 500
+
+# ==========================================
+# 8. ZONA GOD MODE (SUPER PODERES ADMIN) ⚡
+# ==========================================
+
+@auth_bp.route('/admin/asignar-gemas', methods=['POST'])
+def admin_god_mode_gems():
+    """GOD MODE: Inyectar o quitar gemas a cualquier montador."""
+    if not _validar_admin_token():
+        return jsonify({'error': 'Acceso denegado.'}), 401
+
+    data = request.json
+    montador_id = data.get('montador_id')
+    cantidad = data.get('cantidad') # Puede ser positivo (dar) o negativo (quitar)
+
+    try:
+        # Nota: Wallet ya está importado arriba para evitar import-outside-toplevel
+
+        montador = Montador.query.get(montador_id)
+        if not montador:
+            return jsonify({'error': 'Montador no encontrado'}), 404
+
+        if not montador.wallet:
+            # Si no tiene wallet, se la creamos
+            new_wallet = Wallet(montador_id=montador.id, saldo=0)
+            db.session.add(new_wallet)
+            db.session.commit()
+
+        # Modificar saldo
+        montador.wallet.saldo += int(cantidad)
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Saldo actualizado',
+            'nuevo_saldo': montador.wallet.saldo,
+            'montador': montador.nombre
+        }), 200
+
+    except Exception as e: # pylint: disable=broad-exception-caught
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@auth_bp.route('/admin/borrar-trabajo/<int:job_id>', methods=['DELETE'])
+def admin_god_mode_delete_job(job_id):
+    """GOD MODE: Borrar un trabajo de la existencia (Historial, Cotización, etc)."""
+    if not _validar_admin_token():
+        return jsonify({'error': 'Acceso denegado.'}), 401
+
+    try:
+        trabajo = Trabajo.query.get(job_id)
+        if not trabajo:
+            return jsonify({'error': 'Trabajo no existe'}), 404
+
+        # Eliminación dura (HARD DELETE).
+        db.session.delete(trabajo)
+        db.session.commit()
+
+        return jsonify({
+            'message': f'Trabajo {job_id} eliminado del sistema para siempre.'
+        }), 200
+
+    except Exception as e: # pylint: disable=broad-exception-caught
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@auth_bp.route('/admin/borrar-usuario/<int:target_user_id>/<tipo>', methods=['DELETE'])
+def admin_god_mode_delete_user(target_user_id, tipo):
+    """GOD MODE: Eliminar un usuario (Cliente o Montador) y sus datos."""
+    if not _validar_admin_token():
+        return jsonify({'error': 'Acceso denegado.'}), 401
+
+    try:
+        user = None
+        if tipo == 'montador':
+            user = Montador.query.get(target_user_id)
+        else:
+            user = Cliente.query.get(target_user_id)
+
+        if not user:
+            return jsonify({'error': 'Usuario no encontrado'}), 404
+
+        # Al borrar el usuario, se borrarán sus trabajos asociados si hay cascade
+        db.session.delete(user)
+        db.session.commit()
+
+        return jsonify({'message': f'Usuario {tipo} {target_user_id} eliminado.'}), 200
+
+    except Exception as e: # pylint: disable=broad-exception-caught
+        db.session.rollback()
+        return jsonify({
+            'error': f'No se puede borrar (tiene datos vinculados): {str(e)}'
+        }), 500
