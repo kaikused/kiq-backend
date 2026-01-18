@@ -9,11 +9,14 @@ Maneja:
 6. Recuperación de Contraseña
 7. Panel Admin
 8. Verificación de Códigos
+9. Subida de Foto de Perfil
 """
 import random
 from datetime import datetime, timedelta
 # pylint: disable=no-name-in-module
 from flask import Blueprint, request, jsonify
+from flask_cors import cross_origin  # ✅ AÑADIDO: Necesario para el decorador @cross_origin
+import cloudinary.uploader           # ✅ AÑADIDO: Necesario para subir fotos
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -662,3 +665,51 @@ def admin_get_usuarios():
         })
 
     return jsonify(lista_usuarios), 200
+
+# ==========================================
+# 7. SUBIDA DE FOTO DE PERFIL (NUEVO)
+# ==========================================
+
+@auth_bp.route('/perfil/foto', methods=['POST', 'OPTIONS'])
+@cross_origin() # Soluciona el error de CORS bloqueado
+@jwt_required()
+def subir_foto_perfil():
+    # 1. Responder OK al navegador si pregunta por permisos (OPTIONS)
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'ok'}), 200
+
+    # 2. Validar que llega un archivo
+    if 'imagen' not in request.files:
+        return jsonify({'error': 'No se envió ninguna imagen'}), 400
+    
+    file = request.files['imagen']
+    if file.filename == '':
+        return jsonify({'error': 'Nombre de archivo vacío'}), 400
+
+    try:
+        # 3. Identificar al usuario
+        user_id = get_jwt_identity()
+        claims = get_jwt()
+        role = claims.get("rol", "cliente")
+
+        # 4. Subir a Cloudinary (Tu almacenamiento de imágenes)
+        upload_result = cloudinary.uploader.upload(file)
+        url_imagen = upload_result['secure_url']
+
+        # 5. Guardar URL en la Base de Datos
+        user = None
+        if role == 'montador':
+            user = Montador.query.get(int(user_id))
+        else:
+            user = Cliente.query.get(int(user_id))
+        
+        if user:
+            user.foto_url = url_imagen
+            db.session.commit()
+            return jsonify({'message': 'Foto actualizada', 'foto_url': url_imagen}), 200
+        else:
+            return jsonify({'error': 'Usuario no encontrado'}), 404
+
+    except Exception as e:
+        print(f"❌ Error subida foto: {e}")
+        return jsonify({'error': 'Falló la subida de la imagen'}), 500
