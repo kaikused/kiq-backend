@@ -12,20 +12,33 @@ Maneja:
 9. Subida de Foto de Perfil
 """
 import random
+import os  # ✅ NECESARIO para leer variables de entorno
 from datetime import datetime, timedelta
 # pylint: disable=no-name-in-module
 from flask import Blueprint, request, jsonify
-from flask_cors import cross_origin  # ✅ AÑADIDO: Necesario para el decorador @cross_origin
-import cloudinary.uploader           # ✅ AÑADIDO: Necesario para subir fotos
+from flask_cors import cross_origin
+import cloudinary           # ✅ NECESARIO para configurar
+import cloudinary.uploader
+
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from app import db
-# Importamos tus modelos REALES (Quitamos Wallet y GemTransaction porque usamos el servicio)
+# Importamos tus modelos REALES
 from app.models import Cliente, Montador, Trabajo, Code
 # IMPORTAMOS LOS SERVICIOS ROBUSTOS
 from app.email_service import enviar_codigo_verificacion, enviar_email_generico
 from app.gems_service import asignar_bono_bienvenida
+
+# ==========================================
+# 0. CONFIGURACIÓN CLOUDINARY (Integrada)
+# ==========================================
+cloudinary.config( 
+  cloud_name = os.getenv('CLOUDINARY_CLOUD_NAME'), 
+  api_key = os.getenv('CLOUDINARY_API_KEY'), 
+  api_secret = os.getenv('CLOUDINARY_API_SECRET'),
+  secure = True
+)
 
 auth_bp = Blueprint('auth', __name__)
 
