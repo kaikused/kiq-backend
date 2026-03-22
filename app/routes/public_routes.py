@@ -1,5 +1,5 @@
 """
-Rutas públicas para la aplicación (Reseñas API V1).
+Rutas públicas para la aplicación (Reseñas API V1 con Enlaces Reales).
 """
 import os
 import requests
@@ -11,7 +11,7 @@ reviews_cache = TTLCache(maxsize=1, ttl=86400)
 
 @cached(reviews_cache)
 def fetch_google_reviews_v1():
-    """Consulta la API V1 de Google Places con el mapeo correcto."""
+    """Consulta la API V1 de Google Places con mapeo de enlaces."""
     api_key = os.getenv('GOOGLE_PLACES_API_KEY')
     place_id = os.getenv('PLACE_ID')
 
@@ -41,7 +41,6 @@ def fetch_google_reviews_v1():
         reviews_limpias = []
 
         for r in reviews_raw:
-            # Extraemos los datos según la estructura V1 que recibimos
             author_info = r.get("authorAttribution", {})
             text_info = r.get("text", {})
 
@@ -50,7 +49,9 @@ def fetch_google_reviews_v1():
                 "profile_photo_url": author_info.get("photoUri", ""),
                 "rating": r.get("rating", 5),
                 "text": text_info.get("text", ""),
-                "relative_time_description": r.get("relativePublishTimeDescription", "")
+                "relative_time_description": r.get("relativePublishTimeDescription", ""),
+                # Extraemos el link real a la reseña específica
+                "google_maps_uri": r.get("googleMapsUri", f"https://www.google.com/maps/place/?q=place_id:{place_id}")
             })
 
         return {
@@ -62,7 +63,7 @@ def fetch_google_reviews_v1():
         }, 200
 
     except requests.exceptions.RequestException as e:
-        # Arreglado W0718: Ahora capturamos el error específico de conexión
+        # Mantenemos la corrección de Pylint para excepciones generales
         return {"error": str(e)}, 500
 
 @public_bp.route('/get-reviews', methods=['GET'])
