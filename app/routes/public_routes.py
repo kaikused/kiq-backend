@@ -5,21 +5,29 @@ import os
 import requests
 from requests.utils import quote
 from flask import Blueprint, jsonify
+from cachetools import cached, TTLCache
 
 public_bp = Blueprint('public', __name__)
 
+# Creamos una caché que guarda las reseñas durante 24h (86400 segundos).
+# ¡Esto hace que tu web cargue al instante y no gastes cuota de Google!
+reviews_cache = TTLCache(maxsize=1, ttl=86400)
+
 @public_bp.route('/get-reviews', methods=['GET'])
+@cached(reviews_cache)
 def get_reviews():
     """
     Obtiene las reseñas reales desde Google Places API.
     Fuerza HTTPS en las imágenes para evitar bloqueos de contenido mixto.
+    Solo devuelve reseñas de 4 y 5 estrellas.
     """
-    api_key = os.getenv('GOOGLE_API_KEY')
-    place_id = os.getenv('GOOGLE_PLACE_ID')
+    # Usamos las variables exactas que configuramos en el archivo .env
+    api_key = os.getenv('GOOGLE_PLACES_API_KEY')
+    place_id = os.getenv('PLACE_ID')
 
     # 1. Validación de credenciales
     if not api_key or not place_id:
-        print("❌ Error: Faltan credenciales de Google")
+        print("❌ Error: Faltan credenciales de Google para Places")
         return jsonify({
             "error": "Faltan credenciales de Google",
             "result": {"reviews": []}
@@ -43,6 +51,11 @@ def get_reviews():
         reviews_limpias = []
 
         for r in reviews_raw:
+            # FILTRO: Solo pasamos reseñas buenas (4 o 5 estrellas)
+            rating = r.get("rating", 5)
+            if rating < 4:
+                continue
+
             author_name = r.get("author_name", "Cliente Kiq")
             raw_photo = r.get("profile_photo_url")
             
@@ -60,14 +73,17 @@ def get_reviews():
             reviews_limpias.append({
                 "author_name": author_name,
                 "profile_photo_url": photo_url,
-                "rating": r.get("rating", 5),
+                "rating": rating,
                 "text": r.get("text", ""),
                 "relative_time_description": r.get("relative_time_description", "")
             })
 
+        print("✅ Reseñas de Google obtenidas y cacheadas con éxito.")
         return jsonify({
             "result": {
-                "reviews": reviews_limpias
+                "reviews": reviews_limpias,
+                "rating_global": data.get('result', {}).get('rating'),
+                "total_ratings": data.get('result', {}).get('user_ratings_total')
             }
         }), 200
 
