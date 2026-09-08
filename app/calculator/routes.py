@@ -235,7 +235,8 @@ def enviar_presupuesto():
         f"<p>PDF: {pdf_url or 'adjunto'}</p>"
     )
 
-    enviar_lead_interno(leads_email, nombre, precio, pdf_bytes, extra)
+    enviado_ok = enviar_lead_interno(leads_email, nombre, precio, pdf_bytes, extra)
+    print(f"📧 Lead interno a {leads_email}: {enviado_ok} | pdf_url={pdf_url}")
 
     mensaje_wa = (
         f"Hola, soy {nombre}. He pedido un presupuesto de montaje en Kiq.\n"
@@ -245,11 +246,13 @@ def enviar_presupuesto():
     )
     if pdf_url:
         mensaje_wa += f"PDF: {pdf_url}\n"
+    else:
+        mensaje_wa += "El PDF te lo enviamos por correo a Kiq.\n"
     whatsapp_url = f"https://wa.me/{whatsapp_kiq}?text={quote(mensaje_wa)}"
 
     return jsonify({
         "status": "success",
-        "enviado_interno": True,
+        "enviado_interno": enviado_ok,
         "pdf_url": pdf_url,
         "whatsapp_url": whatsapp_url,
     })

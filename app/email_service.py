@@ -6,39 +6,44 @@ import base64
 import resend
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
 load_dotenv()
 
-# Configurar la API Key
 resend.api_key = os.getenv('RESEND_API_KEY')
 
-# Configuración del remitente
-REMITENTE_DEFAULT = "Kiq Montajes <info@kiq.es>"
+REMITENTES = [
+    os.getenv("RESEND_FROM"),
+    "Kiq Montajes <info@kiq.es>",
+    "Kiq Montajes <beth.t@example.com>",
+]
+
 
 def enviar_email_generico(destinatario, asunto, contenido_html, attachments=None, bcc=None):
-    """
-    Función base para enviar cualquier correo.
-    Captura cualquier error para evitar romper el flujo principal.
-    """
-    try:
-        params = {
-            "from": REMITENTE_DEFAULT,
-            "to": [destinatario] if isinstance(destinatario, str) else destinatario,
-            "subject": asunto,
-            "html": contenido_html,
-        }
-        if bcc:
-            params["bcc"] = bcc if isinstance(bcc, list) else [bcc]
-        if attachments:
-            params["attachments"] = attachments
+    """Envía correo. Si el dominio info@kiq.es no está verificado, prueba Resend onboarding."""
+    last_error = None
+    for remitente in REMITENTES:
+        if not remitente:
+            continue
+        try:
+            params = {
+                "from": remitente,
+                "to": [destinatario] if isinstance(destinatario, str) else destinatario,
+                "subject": asunto,
+                "html": contenido_html,
+            }
+            if bcc:
+                params["bcc"] = bcc if isinstance(bcc, list) else [bcc]
+            if attachments:
+                params["attachments"] = attachments
 
-        email = resend.Emails.send(params)
-        print(f"📧 Email enviado a {destinatario}: ID {email.get('id')}")
-        return True
+            email = resend.Emails.send(params)
+            print(f"📧 Email enviado a {destinatario} via {remitente}: ID {email.get('id')}")
+            return True
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            last_error = error
+            print(f"❌ Error enviando email ({remitente}): {error}")
 
-    except Exception as error: # pylint: disable=broad-exception-caught
-        print(f"❌ Error enviando email: {error}")
-        return False
+    print(f"❌ No se pudo enviar email a {destinatario}: {last_error}")
+    return False
 
 def enviar_resumen_presupuesto(email_cliente, nombre_cliente, precio, items_resumen):
     """

@@ -3,9 +3,10 @@ Módulo para gestionar la subida de archivos a Google Cloud Storage.
 """
 import os
 import uuid
+from datetime import timedelta
+from io import BytesIO
 from google.cloud import storage
 
-# Configuración
 BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "kiq-montajes-uploads")
 
 def init_storage():
@@ -71,8 +72,46 @@ def upload_bytes_to_gcs(data, filename, folder="presupuestos", content_type="app
         bucket = client.bucket(BUCKET_NAME)
         blob_path = f"{folder}/{uuid.uuid4()}-{filename}"
         blob = bucket.blob(blob_path)
-        blob.upload_from_string(data, content_type=content_type)
-        return blob.public_url
+        blob.upload_from_string(bytes(data), content_type=content_type)
+        try:
+            return blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(days=7),
+                method="GET",
+            )
+        except Exception as signed_err:  # pylint: disable=broad-except
+            print(f"⚠️ Signed URL GCS falló: {signed_err}")
+            try:
+                blob.make_public()
+            except Exception:  # pylint: disable=broad-except
+                pass
+            return blob.public_url
     except Exception as e:  # pylint: disable=broad-except
         print(f"❌ Error subiendo PDF a GCS: {e}")
+        return _upload_pdf_cloudinary(data, filename)
+
+
+def _upload_pdf_cloudinary(data, filename):
+    """Respaldo si GCS no está disponible."""
+    try:
+        import cloudinary
+        import cloudinary.uploader
+
+        cloudinary.config(
+            cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+            api_key=os.getenv("CLOUDINARY_API_KEY"),
+            api_secret=os.getenv("CLOUDINARY_API_SECRET"),
+            secure=True,
+        )
+        result = cloudinary.uploader.upload(
+            BytesIO(bytes(data)),
+            resource_type="raw",
+            folder="presupuestos",
+            filename=filename,
+            use_filename=True,
+            unique_filename=True,
+        )
+        return result.get("secure_url")
+    except Exception as e:  # pylint: disable=broad-except
+        print(f"❌ Error subiendo PDF a Cloudinary: {e}")
         return None
