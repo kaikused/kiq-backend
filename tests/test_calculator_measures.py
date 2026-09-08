@@ -28,6 +28,10 @@ class TestClassifyMedida(unittest.TestCase):
         self.assertEqual(extract_medida_from_text("cama matrimonio 180"), "180")
         self.assertIsNone(extract_medida_from_text("armario blanco"))
 
+    def test_extract_pequeno_sin_acento(self):
+        self.assertEqual(extract_medida_from_text("canape medida pequeno"), "pequeno")
+        self.assertEqual(classify_medida("pequeno"), "pequeno")
+
 
 if __name__ == "__main__":
     unittest.main()

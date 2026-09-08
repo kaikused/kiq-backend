@@ -219,6 +219,14 @@ def detectar_muebles(
     resultados = analizar_con_gemini_estricto(descripcion)
     if not resultados:
         resultados = analizar_con_spacy_basico(descripcion)
+    else:
+        texto_lower = descripcion.lower()
+        for item in resultados:
+            if item.get("tipo") == "saludo":
+                continue
+            item.setdefault("atributos", {})
+            item["falta_info"] = []
+            _enrich_item(item, texto_lower)
 
     vision_results = detect_from_vision_labels(image_labels)
     return merge_detections(resultados or [], vision_results)

@@ -13,7 +13,7 @@ MEDIDA_KEYWORDS = {
 
 MEDIDA_REGEX = re.compile(
     r"\b(90|105|135|150|160|180|190|200)(?:\s*cm)?\b|"
-    r"\b(individual|pequeñ[oa]|mediano|mediana|king|grande|matrimonio)\b",
+    r"\b(individual|pequeñ[oa]|pequeno|pequena|mediano|mediana|king|grande|matrimonio)\b",
     re.IGNORECASE,
 )
 

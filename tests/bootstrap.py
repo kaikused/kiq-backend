@@ -27,6 +27,7 @@ _MOCKS = [
     "requests",
     "requests.exceptions",
     "spacy",
+    "fpdf",
 ]
 
 for name in _MOCKS:
