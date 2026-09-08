@@ -214,13 +214,15 @@ def enviar_presupuesto():
 
     pdf_bytes = generar_pdf_presupuesto(data)
     pdf_url = None
+    gcs_error = None
     try:
         pdf_url = upload_bytes_to_gcs(
             pdf_bytes,
             "presupuesto-kiq.pdf",
             folder="cotizaciones",
         )
-    except Exception as gcs_error:  # pylint: disable=broad-exception-caught
+    except Exception as err:  # pylint: disable=broad-exception-caught
+        gcs_error = str(err)
         print(f"❌ No se pudo subir el PDF a Google Storage: {gcs_error}")
 
     leads_email = os.getenv("LEADS_EMAIL", "fqvdo7@gmail.com")
@@ -253,5 +255,6 @@ def enviar_presupuesto():
         "status": "success",
         "enviado_interno": enviado_ok,
         "pdf_url": pdf_url,
+        "gcs_error": gcs_error,
         "whatsapp_url": whatsapp_url,
     })

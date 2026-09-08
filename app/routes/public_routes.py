@@ -35,7 +35,14 @@ def fetch_google_reviews_v1():
         data = response.json()
 
         if response.status_code != 200:
-            return {"error": "Google API Error", "details": data}, response.status_code
+            print(f"⚠️ Google Places {response.status_code}: {data}")
+            return {
+                "result": {
+                    "reviews": [],
+                    "rating_global": 5.0,
+                    "business_name": "Kiq montajes"
+                }
+            }, 200
 
         reviews_raw = data.get("reviews", [])
         reviews_limpias = []
