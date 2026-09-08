@@ -11,7 +11,8 @@ MARCA = (109, 40, 217)
 def _txt(value) -> str:
     if value is None:
         return ""
-    return str(value).encode("latin-1", "replace").decode("latin-1")
+    texto = str(value).replace("€", "EUR").replace("—", "-")
+    return texto.encode("latin-1", "replace").decode("latin-1")
 
 
 class PresupuestoPDF(FPDF):
