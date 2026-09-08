@@ -1,118 +1,116 @@
 """
-Módulo para gestionar la subida de archivos a Google Cloud Storage.
+Subida de archivos a Google Cloud Storage (fotos de cotización, outlet, evidencias y PDFs).
+Usa el mismo bucket y las mismas credenciales que Vision AI.
+Las URLs son firmadas (7 días): el bucket puede ser privado.
 """
+import json
 import os
 import uuid
 from datetime import timedelta
-from io import BytesIO
+
 from google.cloud import storage
+from google.oauth2 import service_account
 
 BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "kiq-montajes-uploads")
+URL_TTL_DAYS = 7
 
-def init_storage():
-    """
-    Inicializa las credenciales de Google Cloud si existen.
-    Retorna True si se configura correctamente.
-    """
-    # Buscamos el archivo json en la raíz del proyecto
+
+def _credentials_path():
     basedir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
-    cred_path = os.path.join(basedir, 'google-credentials.json')
+    return os.path.join(basedir, "google-credentials.json")
+
+
+def ensure_google_credentials():
+    """
+    Deja listo google-credentials.json a partir del env de Render
+    o del archivo local. Devuelve la ruta o None.
+    """
+    cred_path = _credentials_path()
+    raw = os.getenv("GOOGLE_CREDENTIALS_JSON")
+
+    if raw:
+        raw = raw.strip()
+        try:
+            info = json.loads(raw)
+            if isinstance(info.get("private_key"), str):
+                info["private_key"] = info["private_key"].replace("\\n", "\n")
+            with open(cred_path, "w", encoding="utf-8") as handle:
+                json.dump(info, handle)
+        except json.JSONDecodeError:
+            with open(cred_path, "w", encoding="utf-8") as handle:
+                handle.write(raw)
 
     if os.path.exists(cred_path):
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = cred_path
-        return True
+        return cred_path
 
-    print(f"⚠️ ADVERTENCIA: No se encontró {cred_path}")
-    return False
+    print(f"⚠️ No hay credenciales Google en {cred_path}")
+    return None
+
+
+def _load_credentials():
+    path = ensure_google_credentials()
+    if not path:
+        raise RuntimeError("Faltan credenciales de Google Cloud Storage")
+    return service_account.Credentials.from_service_account_file(path)
+
+
+def _gcs_client():
+    creds = _load_credentials()
+    project = getattr(creds, "project_id", None)
+    client = storage.Client(credentials=creds, project=project)
+    return client, creds
+
+
+def _signed_url(blob, credentials):
+    """URL que WhatsApp y el navegador pueden abrir sin bucket público."""
+    return blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(days=URL_TTL_DAYS),
+        method="GET",
+        credentials=credentials,
+    )
+
+
+def init_storage():
+    """Compatibilidad con llamadas antiguas."""
+    return ensure_google_credentials() is not None
+
 
 def upload_image_to_gcs(file, folder="misc"):
-    """
-    Sube una imagen a GCS y retorna la URL pública.
-    :param file: Objeto FileStorage de Flask
-    :param folder: Carpeta destino en el bucket
-    """
+    """Sube una imagen al bucket y devuelve URL firmada."""
     try:
-        # Asegurar credenciales antes de intentar subir
-        if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
-            init_storage()
-
-        client = storage.Client()
+        client, creds = _gcs_client()
         bucket = client.bucket(BUCKET_NAME)
-
-        # Generar nombre único usando UUID para evitar colisiones
-        ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
-        filename = f"{uuid.uuid4()}.{ext}"
-        blob_path = f"{folder}/{filename}"
-
-        blob = bucket.blob(blob_path)
-
-        # Subir archivo
-        # (El archivo debe ser público a nivel de bucket para que esta URL funcione)
-        file.seek(0)
-        blob.upload_from_file(file, content_type=file.content_type)
-        return _public_or_signed_url(blob)
-
-    except Exception as e: # pylint: disable=broad-except
-        print(f"❌ Error crítico subiendo a GCS: {e}")
-        return None
-
-
-def _public_or_signed_url(blob):
-    """URL que se puede abrir en el navegador (firmada 7 días, o pública)."""
-    try:
-        return blob.generate_signed_url(
-            version="v4",
-            expiration=timedelta(days=7),
-            method="GET",
+        ext = (
+            file.filename.rsplit(".", 1)[1].lower()
+            if file.filename and "." in file.filename
+            else "jpg"
         )
-    except Exception as signed_err:  # pylint: disable=broad-except
-        print(f"⚠️ Signed URL GCS falló: {signed_err}")
-        try:
-            blob.make_public()
-        except Exception:  # pylint: disable=broad-except
-            pass
-        return blob.public_url
+        blob_path = f"{folder}/{uuid.uuid4()}.{ext}"
+        blob = bucket.blob(blob_path)
+        file.seek(0)
+        blob.upload_from_file(
+            file,
+            content_type=file.content_type or "image/jpeg",
+        )
+        url = _signed_url(blob, creds)
+        print(f"✅ GCS imagen subida: {blob_path}")
+        return url
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"❌ Error subiendo imagen a GCS ({BUCKET_NAME}): {exc}")
+        return None
 
 
 def upload_bytes_to_gcs(data, filename, folder="presupuestos", content_type="application/pdf"):
-    """Sube bytes a GCS y retorna la URL pública."""
-    try:
-        if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
-            init_storage()
-
-        client = storage.Client()
-        bucket = client.bucket(BUCKET_NAME)
-        blob_path = f"{folder}/{uuid.uuid4()}-{filename}"
-        blob = bucket.blob(blob_path)
-        blob.upload_from_string(bytes(data), content_type=content_type)
-        return _public_or_signed_url(blob)
-    except Exception as e:  # pylint: disable=broad-except
-        print(f"❌ Error subiendo PDF a GCS: {e}")
-        return _upload_pdf_cloudinary(data, filename)
-
-
-def _upload_pdf_cloudinary(data, filename):
-    """Respaldo si GCS no está disponible."""
-    try:
-        import cloudinary
-        import cloudinary.uploader
-
-        cloudinary.config(
-            cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
-            api_key=os.getenv("CLOUDINARY_API_KEY"),
-            api_secret=os.getenv("CLOUDINARY_API_SECRET"),
-            secure=True,
-        )
-        result = cloudinary.uploader.upload(
-            BytesIO(bytes(data)),
-            resource_type="image",
-            folder="presupuestos",
-            format="pdf",
-            type="upload",
-            unique_filename=True,
-            overwrite=False,
-        )
-        return result.get("secure_url")
-    except Exception as e:  # pylint: disable=broad-except
-        print(f"❌ Error subiendo PDF a Cloudinary: {e}")
-        return None
+    """Sube un PDF (u otros bytes) al mismo bucket y devuelve URL firmada."""
+    client, creds = _gcs_client()
+    bucket = client.bucket(BUCKET_NAME)
+    safe_name = filename.replace(" ", "-")
+    blob_path = f"{folder}/{uuid.uuid4()}-{safe_name}"
+    blob = bucket.blob(blob_path)
+    blob.content_disposition = f'inline; filename="{safe_name}"'
+    blob.upload_from_string(bytes(data), content_type=content_type)
+    url = _signed_url(blob, creds)
+    print(f"✅ GCS PDF subido: {blob_path}")
+    return url

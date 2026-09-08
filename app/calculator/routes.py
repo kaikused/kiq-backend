@@ -18,15 +18,6 @@ from .pricing import (
     total_final,
 )
 from .tarifario import TARIFARIO
-from .analyzers import detectar_muebles
-from .conversion import build_conversion_payload
-from .logistics import calcular_desplazamiento
-from .pricing import (
-    calcular_presupuesto_items,
-    calcular_presupuesto_parcial,
-    total_final,
-)
-from .tarifario import TARIFARIO
 
 calculator_bp = Blueprint("calculator", __name__)
 
@@ -222,7 +213,11 @@ def enviar_presupuesto():
     precio = data.get("precio_calculado") or 0
 
     pdf_bytes = generar_pdf_presupuesto(data)
-    pdf_url = upload_bytes_to_gcs(pdf_bytes, "presupuesto-kiq.pdf")
+    pdf_url = None
+    try:
+        pdf_url = upload_bytes_to_gcs(pdf_bytes, "presupuesto-kiq.pdf")
+    except Exception as gcs_error:  # pylint: disable=broad-exception-caught
+        print(f"❌ No se pudo subir el PDF a Google Storage: {gcs_error}")
 
     leads_email = os.getenv("LEADS_EMAIL", "fqvdo7@gmail.com")
     whatsapp_kiq = os.getenv("WHATSAPP_KIQ", "34664497889")

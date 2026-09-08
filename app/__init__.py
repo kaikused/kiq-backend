@@ -47,17 +47,10 @@ def create_app():
     stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
     app.config["STRIPE_PUBLIC_KEY"] = os.getenv("STRIPE_PUBLIC_KEY")
 
-    # --- CREDENCIALES GOOGLE (Vision AI) ---
+    # --- CREDENCIALES GOOGLE (Vision AI + Cloud Storage) ---
     try:
-        credentials_path = os.path.join(
-            app.root_path, '..', 'google-credentials.json'
-        )
-        if os.getenv('GOOGLE_CREDENTIALS_JSON'):
-            with open(credentials_path, 'w', encoding='utf-8') as f:
-                f.write(os.getenv('GOOGLE_CREDENTIALS_JSON'))
-
-        if os.path.exists(credentials_path):
-            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = credentials_path
+        from .storage import ensure_google_credentials
+        ensure_google_credentials()
     except Exception as e:  # pylint: disable=broad-exception-caught
         print(f"Nota: Configuración Google omitida: {e}")
 
