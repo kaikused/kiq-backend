@@ -1,13 +1,12 @@
 """Rutas HTTP de la calculadora de presupuestos."""
 import os
-from io import BytesIO
 from urllib.parse import quote
 
 from flask import Blueprint, jsonify, request
 from google.cloud import vision
 
 from ..email_service import enviar_lead_interno
-from ..storage import upload_bytes_to_gcs, upload_image_to_gcs
+from ..storage import upload_bytes_to_gcs
 from .analyzers import detectar_muebles
 from .conversion import build_conversion_payload
 from .logistics import calcular_desplazamiento
@@ -21,11 +20,16 @@ from .tarifario import TARIFARIO
 
 calculator_bp = Blueprint("calculator", __name__)
 
-VISION_CLIENT = None
-try:
-    VISION_CLIENT = vision.ImageAnnotatorClient()
-except Exception:  # pylint: disable=broad-exception-caught
-    VISION_CLIENT = None
+
+def _get_vision_client():
+    """Vision después de cargar credenciales (no al importar el módulo)."""
+    try:
+        from ..storage import get_google_credentials
+        get_google_credentials()
+        return vision.ImageAnnotatorClient()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        print(f"⚠️ Vision client no disponible: {exc}")
+        return None
 
 
 def _parse_input():
@@ -59,22 +63,30 @@ def _parse_input():
                     continue
                 try:
                     file_content = file.read()
-                    file_stream = BytesIO(file_content)
-                    file.stream = file_stream
-                    file.stream.seek(0)
-                    gcs_url = upload_image_to_gcs(file, folder="cotizaciones")
+                    if not file_content:
+                        print(f"⚠️ Imagen {index} vacía (stream consumido o archivo 0 bytes)")
+                        continue
+
+                    gcs_url = upload_bytes_to_gcs(
+                        file_content,
+                        file.filename or f"foto-{index}.jpg",
+                        folder="cotizaciones",
+                        content_type=file.content_type or "image/jpeg",
+                    )
                     if gcs_url:
                         image_urls.append(gcs_url)
 
-                    if index == 0 and VISION_CLIENT:
-                        file_stream.seek(0)
-                        image = vision.Image(content=file_stream.getvalue())
-                        response = VISION_CLIENT.label_detection(image=image)
-                        if not response.error.message:
-                            labels = response.label_annotations
-                            image_labels = [label.description for label in labels[:5]]
+                    if index == 0:
+                        vision_client = _get_vision_client()
+                        if vision_client:
+                            image = vision.Image(content=file_content)
+                            response = vision_client.label_detection(image=image)
+                            if not response.error.message:
+                                image_labels = [
+                                    label.description for label in response.label_annotations[:5]
+                                ]
                 except Exception as e:  # pylint: disable=broad-exception-caught
-                    print(f"Error img {index}: {e}")
+                    print(f"❌ Error img {index}: {e}")
 
     return descripcion, direccion_cliente, analisis_previo, image_urls, image_labels
 
