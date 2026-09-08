@@ -41,6 +41,28 @@ class TestKeywordDetection(unittest.TestCase):
         items = analizar_con_keywords("una balda")
         self.assertEqual(items[0]["tipo"], "balda")
 
+    def test_nuevas_categorias(self):
+        self.assertIn("espejo", find_furniture_keywords("un espejo de pared"))
+        self.assertIn("cabecero", find_furniture_keywords("cabecero de 160"))
+        self.assertIn("soporte_tv", find_furniture_keywords("soporte tv para la salon"))
+        self.assertIn("kallax", find_furniture_keywords("un kallax de ikea"))
+        self.assertIn("cama_abatible", find_furniture_keywords("cama abatible de pared"))
+        self.assertNotIn("canape", find_furniture_keywords("cama abatible de pared"))
+        self.assertIn("zapatero", find_furniture_keywords("zapatero estrecho"))
+        self.assertIn("mesa_centro", find_furniture_keywords("mesa de centro"))
+        self.assertNotIn("mesa_comedor", find_furniture_keywords("mesa de centro"))
+        self.assertIn("litera", find_furniture_keywords("una litera"))
+        self.assertIn("cuna", find_furniture_keywords("cuna de bebe"))
+        self.assertIn("mueble_bano", find_furniture_keywords("mueble de baño"))
+        self.assertIn("cortinas", find_furniture_keywords("montar cortinas"))
+        self.assertIn("tendedero", find_furniture_keywords("tendedero de pared"))
+
+    def test_consulta_fuera_de_tarifario(self):
+        from app.calculator.analyzers import es_pedido_fuera_de_tarifario
+        self.assertTrue(es_pedido_fuera_de_tarifario("montame un toldo electrico"))
+        self.assertFalse(es_pedido_fuera_de_tarifario("un kallax blanco"))
+        self.assertNotIn("cama", find_furniture_keywords("cama abatible de pared"))
+
     def test_dos_armarios_cantidad(self):
         items = analizar_con_keywords("2 armarios pax corredera 3 puertas")
         armarios = [i for i in items if i["tipo"] == "armario"]

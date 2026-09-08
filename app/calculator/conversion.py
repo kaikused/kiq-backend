@@ -64,6 +64,14 @@ def build_conversion_payload(
             "precio_gancho": f"{total:.0f}€",
         })
 
+    elif status == "consulta_manual":
+        conversion.update({
+            "headline": "Lo cotizamos a mano",
+            "subheadline": "No está en el tarifario automático. Kiq te confirma el precio.",
+            "cta_primary": "Enviar consulta por WhatsApp",
+            "cta_secondary": "Añadir otra foto",
+        })
+
     elif status == "unknown":
         conversion.update({
             "headline": "¿Qué mueble necesitas montar?",

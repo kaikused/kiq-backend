@@ -17,6 +17,18 @@ def _precio_rango_tipo(tipo: str) -> tuple[float, float]:
 
 def calcular_precio_item(tipo: str, cantidad: int, attrs: dict) -> dict:
     """Calcula precio unitario y extras para un ítem."""
+    if tipo == "consulta":
+        texto = (attrs.get("texto") or "Consulta")[:80]
+        return {
+            "precio_unitario": 0,
+            "subtotal": 0,
+            "coste_extras": 0,
+            "extras": [],
+            "necesita_anclaje": False,
+            "display_name": texto,
+            "consulta": True,
+        }
+
     tarifas = TARIFARIO.get(tipo, {"precio_base": 40, "necesita_anclaje": False})
     precio_unitario = tarifas.get("precio_base", 40)
     reglas = tarifas.get("reglas_precio", {})
@@ -141,8 +153,14 @@ def total_final(
     coste_extras: float,
     coste_desplazamiento: float,
     anclaje_global: bool,
+    consulta: bool = False,
 ) -> dict:
     """Calcula total final con mínimo garantizado."""
+    if consulta:
+        return {
+            "coste_anclaje": 0.0,
+            "total_presupuesto": None,
+        }
     coste_anclaje = COSTE_ANCLAJE if anclaje_global else 0.0
     total = coste_muebles_base + coste_extras + coste_desplazamiento + coste_anclaje
     precio_final = max(total, PRECIO_MINIMO)

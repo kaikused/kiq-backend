@@ -47,10 +47,13 @@ def generar_pdf_presupuesto(payload: dict) -> bytes:
     telefono = _txt(payload.get("telefono") or "")
     email = _txt(payload.get("email") or "")
     desglose = payload.get("desglose") or {}
+    consulta = bool(payload.get("consulta_manual") or desglose.get("consulta_manual"))
+    titulo = "Consulta de montaje" if consulta else "Presupuesto de montaje"
     items = desglose.get("muebles_cotizados") or []
+    blanco = "---"
 
     pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "Presupuesto de montaje", ln=True)
+    pdf.cell(0, 8, titulo, ln=True)
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(100, 100, 100)
     pdf.cell(0, 6, datetime.utcnow().strftime("%d/%m/%Y %H:%M UTC"), ln=True)
@@ -86,8 +89,12 @@ def generar_pdf_presupuesto(payload: dict) -> bytes:
     for item in items:
         pdf.cell(90, 7, _txt(item.get("item", "")), border=1)
         pdf.cell(25, 7, str(item.get("cantidad", 1)), border=1, align="C")
-        pdf.cell(35, 7, f"{item.get('precio_unitario', 0):.0f} EUR", border=1, align="R")
-        pdf.cell(35, 7, f"{item.get('subtotal', 0):.0f} EUR", border=1, align="R", ln=True)
+        if consulta:
+            pdf.cell(35, 7, blanco, border=1, align="R")
+            pdf.cell(35, 7, blanco, border=1, align="R", ln=True)
+        else:
+            pdf.cell(35, 7, f"{item.get('precio_unitario', 0):.0f} EUR", border=1, align="R")
+            pdf.cell(35, 7, f"{item.get('subtotal', 0):.0f} EUR", border=1, align="R", ln=True)
 
     pdf.ln(2)
     pdf.set_font("Helvetica", "", 10)
@@ -95,20 +102,36 @@ def generar_pdf_presupuesto(payload: dict) -> bytes:
     for extra in extras:
         pdf.cell(0, 5, f"- {_txt(extra)}", ln=True)
 
-    pdf.cell(0, 6, f"Desplazamiento: {desglose.get('coste_desplazamiento', 0)} EUR  ({_txt(desglose.get('distancia_km', ''))})", ln=True)
-    pdf.cell(0, 6, f"Anclaje: {desglose.get('coste_anclaje_estimado', 0)} EUR", ln=True)
-    pdf.ln(2)
-    pdf.set_font("Helvetica", "B", 16)
-    pdf.set_text_color(*MARCA)
-    pdf.cell(0, 10, f"Total estimado: {float(precio):.0f} EUR", ln=True)
-    pdf.set_text_color(80, 80, 80)
-    pdf.set_font("Helvetica", "", 8)
-    pdf.multi_cell(
-        0,
-        5,
-        _txt("Precio orientativo. Incluye montaje profesional y desplazamiento en zona estandar. "
-             "Un montador confirmara el detalle antes del servicio."),
-    )
+    zona = _txt(desglose.get("distancia_km", ""))
+    if consulta:
+        pdf.cell(0, 6, f"Desplazamiento: {blanco}  ({zona})", ln=True)
+        pdf.cell(0, 6, f"Anclaje: {blanco}", ln=True)
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.set_text_color(*MARCA)
+        pdf.cell(0, 10, "Total estimado: ________ EUR", ln=True)
+        pdf.set_text_color(80, 80, 80)
+        pdf.set_font("Helvetica", "", 8)
+        pdf.multi_cell(
+            0,
+            5,
+            _txt("Consulta para cotizar a mano. Kiq confirmara el precio antes del servicio."),
+        )
+    else:
+        pdf.cell(0, 6, f"Desplazamiento: {desglose.get('coste_desplazamiento', 0)} EUR  ({zona})", ln=True)
+        pdf.cell(0, 6, f"Anclaje: {desglose.get('coste_anclaje_estimado', 0)} EUR", ln=True)
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.set_text_color(*MARCA)
+        pdf.cell(0, 10, f"Total estimado: {float(precio or 0):.0f} EUR", ln=True)
+        pdf.set_text_color(80, 80, 80)
+        pdf.set_font("Helvetica", "", 8)
+        pdf.multi_cell(
+            0,
+            5,
+            _txt("Precio orientativo. Incluye montaje profesional y desplazamiento en zona estandar. "
+                 "Un montador confirmara el detalle antes del servicio."),
+        )
 
     _add_fotos(pdf, payload.get("imagenes") or [])
     return bytes(pdf.output())

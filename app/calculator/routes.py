@@ -14,7 +14,7 @@ from ..storage import (
     signed_url_for_blob,
     upload_bytes_to_gcs,
 )
-from .analyzers import alinear_con_pedido, detectar_muebles
+from .analyzers import alinear_con_pedido, detectar_muebles, es_pedido_fuera_de_tarifario, item_consulta
 from .conversion import build_conversion_payload
 from .logistics import calcular_desplazamiento
 from .pdf import generar_pdf_presupuesto
@@ -149,15 +149,33 @@ def calcular_presupuesto():
     """Endpoint principal para cálculo de presupuestos."""
     descripcion, direccion, analisis_previo, image_urls, image_labels, carpeta = _parse_input()
 
+    consulta_manual = False
+
     if analisis_previo:
         muebles_procesados = alinear_con_pedido(descripcion, analisis_previo)
+        consulta_manual = any(item.get("tipo") == "consulta" for item in muebles_procesados)
     else:
         muebles_procesados = alinear_con_pedido(
             descripcion,
             detectar_muebles(descripcion, image_labels),
         )
 
-        if not muebles_procesados:
+        if len(muebles_procesados) == 1 and muebles_procesados[0].get("tipo") == "saludo":
+            return jsonify({
+                "status": "greeting",
+                "ACLARACION_REQUERIDA": True,
+                "MUEBLE_PROBABLE": "saludo",
+                "mensaje": "Saludo detectado.",
+                "conversion": build_conversion_payload(status="unknown"),
+                "carpeta_gcs": carpeta,
+            }), 200
+
+        if es_pedido_fuera_de_tarifario(descripcion) or (
+            not muebles_procesados and (descripcion or "").strip()
+        ):
+            muebles_procesados = [item_consulta(descripcion)]
+            consulta_manual = True
+        elif not muebles_procesados:
             conversion = build_conversion_payload(status="unknown")
             return jsonify({
                 "status": "unknown",
@@ -170,21 +188,14 @@ def calcular_presupuesto():
                 "carpeta_gcs": carpeta,
             }), 200
 
-        if len(muebles_procesados) == 1 and muebles_procesados[0].get("tipo") == "saludo":
-            return jsonify({
-                "status": "greeting",
-                "ACLARACION_REQUERIDA": True,
-                "MUEBLE_PROBABLE": "saludo",
-                "mensaje": "Saludo detectado.",
-                "conversion": build_conversion_payload(status="unknown"),
-                "carpeta_gcs": carpeta,
-            }), 200
-
-        if any(item.get("falta_info") for item in muebles_procesados):
+        if not consulta_manual and any(item.get("falta_info") for item in muebles_procesados):
             return _build_clarification_response(
                 muebles_procesados, image_urls, image_labels, carpeta
             )
 
+    consulta_manual = consulta_manual or any(
+        item.get("tipo") == "consulta" for item in muebles_procesados
+    )
     presupuesto = calcular_presupuesto_items(muebles_procesados)
     logistica = calcular_desplazamiento(direccion)
     totales = total_final(
@@ -192,31 +203,34 @@ def calcular_presupuesto():
         presupuesto["coste_extras"],
         logistica["coste_desplazamiento"],
         presupuesto["anclaje_global"],
+        consulta=consulta_manual,
     )
 
     conversion = build_conversion_payload(
-        status="success",
+        status="consulta_manual" if consulta_manual else "success",
         items=muebles_procesados,
         total=totales["total_presupuesto"],
     )
 
     return jsonify({
-        "status": "success",
+        "status": "consulta_manual" if consulta_manual else "success",
+        "consulta_manual": consulta_manual,
         "total_presupuesto": totales["total_presupuesto"],
         "analisis": {
-            "necesita_anclaje_general": presupuesto["anclaje_global"],
+            "necesita_anclaje_general": False if consulta_manual else presupuesto["anclaje_global"],
             "items": muebles_procesados,
         },
         "desglose": {
             "muebles_cotizados": presupuesto["muebles_cotizados"],
-            "coste_muebles_base": presupuesto["coste_muebles_base"],
-            "extras_calculados": presupuesto["coste_extras"],
-            "coste_desplazamiento": logistica["coste_desplazamiento"],
-            "coste_anclaje_estimado": totales["coste_anclaje"],
-            "detalles_extras": presupuesto["detalles_factura"],
+            "coste_muebles_base": presupuesto["coste_muebles_base"] if not consulta_manual else 0,
+            "extras_calculados": presupuesto["coste_extras"] if not consulta_manual else 0,
+            "coste_desplazamiento": 0 if consulta_manual else logistica["coste_desplazamiento"],
+            "coste_anclaje_estimado": 0 if consulta_manual else totales["coste_anclaje"],
+            "detalles_extras": [] if consulta_manual else presupuesto["detalles_factura"],
             "distancia_km": logistica["distancia_km"],
+            "consulta_manual": consulta_manual,
         },
-        "necesita_anclaje": presupuesto["anclaje_global"],
+        "necesita_anclaje": False if consulta_manual else presupuesto["anclaje_global"],
         "conversion": conversion,
         "image_urls": image_urls,
         "image_labels": image_labels,
@@ -253,7 +267,8 @@ def enviar_presupuesto():
     nombre = (data.get("nombre") or "Cliente").strip()
     email = (data.get("email") or "").strip()
     telefono = (data.get("telefono") or "").strip()
-    precio = data.get("precio_calculado") or 0
+    consulta = bool(data.get("consulta_manual") or (data.get("desglose") or {}).get("consulta_manual"))
+    precio = data.get("precio_calculado")
 
     pdf_bytes = generar_pdf_presupuesto(data)
     pdf_url = None
@@ -282,18 +297,32 @@ def enviar_presupuesto():
         f"<p>Teléfono: {telefono or '—'}</p>"
         f"<p>Zona: {data.get('direccion') or '—'}</p>"
         f"<p>Descripción: {data.get('descripcion') or '—'}</p>"
+        f"<p>Tipo: {'Consulta manual' if consulta else 'Presupuesto'}</p>"
         f"<p>PDF: {pdf_corto or pdf_url or 'adjunto'}</p>"
     )
 
-    enviado_ok = enviar_lead_interno(leads_email, nombre, precio, pdf_bytes, extra)
+    enviado_ok = enviar_lead_interno(
+        leads_email,
+        nombre,
+        "a confirmar" if consulta else precio,
+        pdf_bytes,
+        extra,
+    )
     print(f"📧 Lead interno a {leads_email}: {enviado_ok} | pdf_url={pdf_url}")
 
-    mensaje_wa = (
-        f"Hola, soy {nombre}. He pedido un presupuesto de montaje en Kiq.\n"
-        f"Total estimado: {precio}€\n"
-        f"Zona: {data.get('direccion') or 'pendiente'}\n"
-        f"Qué montar: {data.get('descripcion') or 'muebles'}\n"
-    )
+    if consulta:
+        mensaje_wa = (
+            f"Hola, soy {nombre}. He pedido una consulta de montaje en Kiq (sin precio cerrado).\n"
+            f"Zona: {data.get('direccion') or 'pendiente'}\n"
+            f"Qué montar: {data.get('descripcion') or 'muebles'}\n"
+        )
+    else:
+        mensaje_wa = (
+            f"Hola, soy {nombre}. He pedido un presupuesto de montaje en Kiq.\n"
+            f"Total estimado: {precio}€\n"
+            f"Zona: {data.get('direccion') or 'pendiente'}\n"
+            f"Qué montar: {data.get('descripcion') or 'muebles'}\n"
+        )
     link_pdf = pdf_corto or pdf_url
     if link_pdf:
         mensaje_wa += f"PDF: {link_pdf}\n"

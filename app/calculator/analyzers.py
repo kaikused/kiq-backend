@@ -76,6 +76,11 @@ def find_furniture_keywords(texto: str) -> list[str]:
             encontrados.append(key)
             usado.add(key)
 
+    if "cama_abatible" in usado:
+        encontrados = [t for t in encontrados if t != "cama"]
+    if "mesa_centro" in usado:
+        encontrados = [t for t in encontrados if t != "mesa_comedor"]
+
     return encontrados
 
 
@@ -236,6 +241,11 @@ TIPO_ALIASES = {
     "baldas": "balda",
     "shelf": "balda",
     "shelving": "balda",
+    "espejos": "espejo",
+    "cabezal": "cabecero",
+    "kallax ikea": "kallax",
+    "cubos": "kallax",
+    "tv pared": "soporte_tv",
 }
 
 
@@ -276,3 +286,25 @@ def detectar_muebles(
 
     vision_results = detect_from_vision_labels(image_labels)
     return merge_detections(resultados or [], vision_results)
+
+
+def item_consulta(descripcion: str) -> dict:
+    texto = (descripcion or "").strip() or "Montaje a consultar"
+    return {
+        "tipo": "consulta",
+        "cantidad": 1,
+        "atributos": {"texto": texto},
+        "falta_info": [],
+        "confianza": 0.4,
+        "fuente": "consulta",
+    }
+
+
+def es_pedido_fuera_de_tarifario(descripcion: str) -> bool:
+    """True si hay texto de montaje pero no encaja en el catálogo."""
+    texto = (descripcion or "").strip()
+    if not texto:
+        return False
+    if find_furniture_keywords(descripcion):
+        return False
+    return True
