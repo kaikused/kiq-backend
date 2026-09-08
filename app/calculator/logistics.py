@@ -75,12 +75,22 @@ def _sin_acentos(texto: str) -> str:
     return "".join(ch for ch in nfkd if not unicodedata.combining(ch)).lower()
 
 
+# 15 EUR cubren los primeros 20 km (Málaga y alrededores).
+# Luego 0,50 EUR por km de ida. Se redondea a 5 EUR.
+KM_INCLUIDOS = 20
+TARIFA_BASE = 15
+EUR_POR_KM = 0.50
+
+
+def _redondear_cinco(importe: float) -> int:
+    return int(round(importe / 5.0) * 5)
+
+
 def coste_por_km(km: float) -> int:
-    if km > 40:
-        return 35
-    if km > 20:
-        return 25
-    return 15
+    if km <= KM_INCLUIDOS:
+        return TARIFA_BASE
+    extra = (km - KM_INCLUIDOS) * EUR_POR_KM
+    return max(TARIFA_BASE, _redondear_cinco(TARIFA_BASE + extra))
 
 
 def km_local_por_zona(direccion: str) -> float | None:
@@ -195,7 +205,7 @@ def calcular_desplazamiento(direccion_cliente: str | None) -> dict:
     if km is None:
         print(f"⚠️ Desplazamiento sin distancia para '{direccion_cliente}'")
         return {
-            "coste_desplazamiento": 35,
+            "coste_desplazamiento": 80,
             "distancia_km": "Fuera de zona habitual (a confirmar)",
         }
 
