@@ -215,7 +215,11 @@ def enviar_presupuesto():
     pdf_bytes = generar_pdf_presupuesto(data)
     pdf_url = None
     try:
-        pdf_url = upload_bytes_to_gcs(pdf_bytes, "presupuesto-kiq.pdf")
+        pdf_url = upload_bytes_to_gcs(
+            pdf_bytes,
+            "presupuesto-kiq.pdf",
+            folder="cotizaciones",
+        )
     except Exception as gcs_error:  # pylint: disable=broad-exception-caught
         print(f"❌ No se pudo subir el PDF a Google Storage: {gcs_error}")
 

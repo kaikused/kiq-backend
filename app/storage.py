@@ -102,8 +102,8 @@ def upload_image_to_gcs(file, folder="misc"):
         return None
 
 
-def upload_bytes_to_gcs(data, filename, folder="presupuestos", content_type="application/pdf"):
-    """Sube un PDF (u otros bytes) al mismo bucket y devuelve URL firmada."""
+def upload_bytes_to_gcs(data, filename, folder="cotizaciones", content_type="application/pdf"):
+    """Sube un PDF al mismo bucket/carpeta de cotizaciones y devuelve URL firmada."""
     client, creds = _gcs_client()
     bucket = client.bucket(BUCKET_NAME)
     safe_name = filename.replace(" ", "-")
