@@ -28,6 +28,12 @@ from .tarifario import TARIFARIO
 calculator_bp = Blueprint("calculator", __name__)
 
 
+@calculator_bp.route("/health", methods=["GET"])
+def health():
+    """Ping ligero para despertar el servidor en Render."""
+    return jsonify({"ok": True}), 200
+
+
 def _get_vision_client():
     """Vision después de cargar credenciales (no al importar el módulo)."""
     try:
