@@ -9,6 +9,7 @@ from requests.exceptions import RequestException, Timeout
 ORIGEN_POR_DEFECTO = "Málaga Centro, Málaga, España"
 
 # Distancia aproximada desde Málaga centro si Maps no responde.
+# Orden: coincidencias más específicas primero.
 ZONAS_KM = (
     (["ronda"], 102),
     (["estepona"], 85),
@@ -23,9 +24,21 @@ ZONAS_KM = (
     (["benalmadena", "arroyo de la miel"], 22),
     (["torremolinos"], 16),
     (["rincon de la victoria", "rincon"], 15),
-    (["teatinos", "carretera de cadiz", "ciudad jardin", "malaga centro", "malaga"], 8),
+    (["teatinos", "carretera de cadiz", "ciudad jardin", "malaga centro"], 8),
+    (["sevilla", "seville"], 205),
+    (["granada"], 125),
+    (["cordoba"], 160),
+    (["jerez"], 235),
+    (["cadiz"], 235),
+    (["almeria"], 200),
+    (["jaen"], 200),
+    (["huelva"], 300),
+    (["murcia"], 380),
+    (["madrid"], 530),
+    (["malaga"], 8),
 )
 
+# Prefijos de CP (más largos primero). 41xxx = Sevilla, 29xxx = Málaga, etc.
 CP_KM = (
     ("294", 102),  # Ronda
     ("29680", 85),  # Estepona
@@ -45,6 +58,15 @@ CP_KM = (
     ("29620", 16),  # Torremolinos
     ("29730", 15),  # Rincón
     ("290", 8),  # Málaga capital
+    ("41", 205),  # Sevilla
+    ("18", 125),  # Granada
+    ("14", 160),  # Córdoba
+    ("11", 235),  # Cádiz
+    ("04", 200),  # Almería
+    ("23", 200),  # Jaén
+    ("21", 300),  # Huelva
+    ("30", 380),  # Murcia
+    ("28", 530),  # Madrid
 )
 
 
@@ -81,22 +103,24 @@ def km_local_por_zona(direccion: str) -> float | None:
     return None
 
 
-def _api_key() -> str | None:
-    return (
-        os.getenv("GOOGLE_MAPS_API_KEY")
-        or os.getenv("GOOGLE_API_KEY")
-        or os.getenv("GOOGLE_PLACES_API_KEY")
-    )
+def _api_keys() -> list[str]:
+    """Prueba Maps, luego API general, luego Places (la de reseñas también sirve si tiene Distance Matrix)."""
+    vistos = []
+    for nombre in ("GOOGLE_MAPS_API_KEY", "GOOGLE_API_KEY", "GOOGLE_PLACES_API_KEY"):
+        valor = (os.getenv(nombre) or "").strip()
+        if valor and valor not in vistos:
+            vistos.append(valor)
+    return vistos
 
 
 def _destinos(direccion: str) -> list[str]:
     raw = (direccion or "").strip()
     if not raw:
         return []
-    candidatos = [raw]
     bajo = _sin_acentos(raw)
+    candidatos = [raw]
     if "espana" not in bajo and "spain" not in bajo:
-        candidatos.append(f"{raw}, Málaga, España")
+        # No forzar Málaga: "sevilla, Málaga, España" rompe o falsea la ruta.
         candidatos.append(f"{raw}, España")
     vistos = []
     for item in candidatos:
@@ -106,49 +130,53 @@ def _destinos(direccion: str) -> list[str]:
 
 
 def _km_desde_maps(direccion_cliente: str) -> float | None:
-    api_key = _api_key()
-    if not api_key:
-        print("⚠️ Distance Matrix: falta GOOGLE_MAPS_API_KEY / GOOGLE_API_KEY")
+    api_keys = _api_keys()
+    if not api_keys:
+        print("⚠️ Distance Matrix: falta GOOGLE_MAPS_API_KEY / GOOGLE_API_KEY / GOOGLE_PLACES_API_KEY")
         return None
 
     origin = os.getenv("ORIGIN_ADDRESS") or ORIGEN_POR_DEFECTO
     url = "https://maps.googleapis.com/maps/api/distancematrix/json"
 
-    for destino in _destinos(direccion_cliente):
-        try:
-            resp = requests.get(
-                url,
-                params={
-                    "origins": origin,
-                    "destinations": destino,
-                    "key": api_key,
-                    "region": "es",
-                    "language": "es",
-                    "units": "metric",
-                },
-                timeout=8,
-            )
-            data = resp.json()
-        except (RequestException, Timeout, ValueError) as exc:
-            print(f"⚠️ Distance Matrix red: {exc}")
-            continue
+    for api_key in api_keys:
+        for destino in _destinos(direccion_cliente):
+            try:
+                resp = requests.get(
+                    url,
+                    params={
+                        "origins": origin,
+                        "destinations": destino,
+                        "key": api_key,
+                        "region": "es",
+                        "language": "es",
+                        "units": "metric",
+                    },
+                    timeout=8,
+                )
+                data = resp.json()
+            except (RequestException, Timeout, ValueError) as exc:
+                print(f"⚠️ Distance Matrix red: {exc}")
+                continue
 
-        status = data.get("status")
-        if status != "OK":
-            print(f"⚠️ Distance Matrix {status}: {data.get('error_message', '')}")
-            continue
+            status = data.get("status")
+            if status == "REQUEST_DENIED":
+                print(f"⚠️ Distance Matrix REQUEST_DENIED: {data.get('error_message', '')}")
+                break
+            if status != "OK":
+                print(f"⚠️ Distance Matrix {status}: {data.get('error_message', '')}")
+                continue
 
-        try:
-            element = data["rows"][0]["elements"][0]
-        except (KeyError, IndexError):
-            continue
+            try:
+                element = data["rows"][0]["elements"][0]
+            except (KeyError, IndexError):
+                continue
 
-        elem_status = element.get("status")
-        if elem_status != "OK":
-            print(f"⚠️ Distance Matrix destino '{destino}': {elem_status}")
-            continue
+            elem_status = element.get("status")
+            if elem_status != "OK":
+                print(f"⚠️ Distance Matrix destino '{destino}': {elem_status}")
+                continue
 
-        return element["distance"]["value"] / 1000
+            return element["distance"]["value"] / 1000
 
     return None
 
@@ -166,7 +194,10 @@ def calcular_desplazamiento(direccion_cliente: str | None) -> dict:
 
     if km is None:
         print(f"⚠️ Desplazamiento sin distancia para '{direccion_cliente}'")
-        return {"coste_desplazamiento": 15, "distancia_km": "Zona no reconocida"}
+        return {
+            "coste_desplazamiento": 35,
+            "distancia_km": "Fuera de zona habitual (a confirmar)",
+        }
 
     coste = coste_por_km(km)
     etiqueta = f"{km:.1f} km"
