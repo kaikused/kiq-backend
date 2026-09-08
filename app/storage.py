@@ -48,18 +48,30 @@ def upload_image_to_gcs(file, folder="misc"):
 
         # Subir archivo
         # (El archivo debe ser público a nivel de bucket para que esta URL funcione)
-        file.seek(0) # Volver al inicio del stream antes de subir
+        file.seek(0)
         blob.upload_from_file(file, content_type=file.content_type)
-        
-        # ELIMINADO: blob.make_public() y su bloque try/except.
-
-        # Retornar la URL pública del objeto
-        return blob.public_url
+        return _public_or_signed_url(blob)
 
     except Exception as e: # pylint: disable=broad-except
-        # Capturamos Exception genérico para que la app no se caiga si falla la nube
         print(f"❌ Error crítico subiendo a GCS: {e}")
         return None
+
+
+def _public_or_signed_url(blob):
+    """URL que se puede abrir en el navegador (firmada 7 días, o pública)."""
+    try:
+        return blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(days=7),
+            method="GET",
+        )
+    except Exception as signed_err:  # pylint: disable=broad-except
+        print(f"⚠️ Signed URL GCS falló: {signed_err}")
+        try:
+            blob.make_public()
+        except Exception:  # pylint: disable=broad-except
+            pass
+        return blob.public_url
 
 
 def upload_bytes_to_gcs(data, filename, folder="presupuestos", content_type="application/pdf"):
@@ -73,19 +85,7 @@ def upload_bytes_to_gcs(data, filename, folder="presupuestos", content_type="app
         blob_path = f"{folder}/{uuid.uuid4()}-{filename}"
         blob = bucket.blob(blob_path)
         blob.upload_from_string(bytes(data), content_type=content_type)
-        try:
-            return blob.generate_signed_url(
-                version="v4",
-                expiration=timedelta(days=7),
-                method="GET",
-            )
-        except Exception as signed_err:  # pylint: disable=broad-except
-            print(f"⚠️ Signed URL GCS falló: {signed_err}")
-            try:
-                blob.make_public()
-            except Exception:  # pylint: disable=broad-except
-                pass
-            return blob.public_url
+        return _public_or_signed_url(blob)
     except Exception as e:  # pylint: disable=broad-except
         print(f"❌ Error subiendo PDF a GCS: {e}")
         return _upload_pdf_cloudinary(data, filename)
@@ -105,11 +105,12 @@ def _upload_pdf_cloudinary(data, filename):
         )
         result = cloudinary.uploader.upload(
             BytesIO(bytes(data)),
-            resource_type="raw",
+            resource_type="image",
             folder="presupuestos",
-            filename=filename,
-            use_filename=True,
+            format="pdf",
+            type="upload",
             unique_filename=True,
+            overwrite=False,
         )
         return result.get("secure_url")
     except Exception as e:  # pylint: disable=broad-except

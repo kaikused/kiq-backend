@@ -115,7 +115,7 @@ def _build_clarification_response(resultados, image_urls, image_labels):
         "mensaje": "Se requiere especificar el tamaño o detalles.",
         "image_urls": image_urls,
         "image_labels": image_labels,
-    }), 422
+    }), 200
 
 
 @calculator_bp.route("/calcular_presupuesto", methods=["POST"])
@@ -138,7 +138,7 @@ def calcular_presupuesto():
                 "conversion": conversion,
                 "image_urls": image_urls,
                 "image_labels": image_labels,
-            }), 422
+            }), 200
 
         if len(muebles_procesados) == 1 and muebles_procesados[0].get("tipo") == "saludo":
             return jsonify({
@@ -147,7 +147,7 @@ def calcular_presupuesto():
                 "MUEBLE_PROBABLE": "saludo",
                 "mensaje": "Saludo detectado.",
                 "conversion": build_conversion_payload(status="unknown"),
-            }), 422
+            }), 200
 
         if any(item.get("falta_info") for item in muebles_procesados):
             return _build_clarification_response(muebles_procesados, image_urls, image_labels)
