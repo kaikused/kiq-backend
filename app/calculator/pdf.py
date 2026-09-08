@@ -5,6 +5,8 @@ from io import BytesIO
 import requests
 from fpdf import FPDF
 
+from ..storage import comprimir_imagen
+
 MARCA = (109, 40, 217)
 
 
@@ -139,7 +141,8 @@ def _add_fotos(pdf: PresupuestoPDF, image_urls: list):
             resp = requests.get(url, timeout=6)
             if resp.status_code != 200 or not resp.content:
                 continue
-            img = BytesIO(resp.content)
+            comprimida, _ctype, _name = comprimir_imagen(resp.content, "foto.jpg")
+            img = BytesIO(comprimida)
             col = idx % 2
             row = idx // 2
             x = x_start + col * (slot_w + 8)

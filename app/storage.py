@@ -5,8 +5,11 @@ No usa Cloudinary. Las URLs van firmadas 7 días (el bucket puede ser privado).
 """
 import json
 import os
+import re
+import unicodedata
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
+from io import BytesIO
 
 from google.cloud import storage
 from google.oauth2 import service_account
@@ -112,7 +115,63 @@ def _read_bytes(file_or_bytes):
     return data
 
 
-def upload_bytes_to_gcs(data, filename, folder="cotizaciones", content_type="application/octet-stream"):
+def slug_cliente(nombre: str) -> str:
+    texto = unicodedata.normalize("NFKD", nombre or "cliente")
+    texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
+    texto = re.sub(r"[^a-zA-Z0-9]+", "-", texto.lower()).strip("-")
+    return (texto or "cliente")[:32]
+
+
+def nueva_carpeta_cotizacion(nombre: str) -> str:
+    """cotizaciones/luis-2026-09-08-a3f2 — identificable en el bucket."""
+    slug = slug_cliente(nombre)
+    fecha = datetime.utcnow().strftime("%Y-%m-%d")
+    extra = uuid.uuid4().hex[:4]
+    return f"cotizaciones/{slug}-{fecha}-{extra}"
+
+
+def codigo_desde_carpeta(carpeta: str) -> str:
+    return (carpeta or "").rstrip("/").split("/")[-1]
+
+
+def carpeta_valida(code: str) -> bool:
+    return bool(re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,80}", code or ""))
+
+
+def comprimir_imagen(data: bytes, filename: str = "foto.jpg") -> tuple[bytes, str, str]:
+    """Reduce fotos a JPEG ~1280px para no inflar PDF ni el bucket."""
+    payload = bytes(data or b"")
+    if not payload:
+        return payload, "image/jpeg", "foto.jpg"
+    try:
+        from PIL import Image
+
+        imagen = Image.open(BytesIO(payload))
+        if imagen.mode in ("RGBA", "LA"):
+            fondo = Image.new("RGB", imagen.size, (255, 255, 255))
+            fondo.paste(imagen, mask=imagen.split()[-1])
+            imagen = fondo
+        else:
+            imagen = imagen.convert("RGB")
+        imagen.thumbnail((1280, 1280))
+        salida = BytesIO()
+        imagen.save(salida, format="JPEG", quality=72, optimize=True)
+        comprimido = salida.getvalue()
+        if len(comprimido) < len(payload):
+            payload = comprimido
+        return payload, "image/jpeg", "foto.jpg"
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        print(f"⚠️ No se pudo comprimir {filename}: {exc}")
+        return payload, "image/jpeg", filename or "foto.jpg"
+
+
+def upload_bytes_to_gcs(
+    data,
+    filename,
+    folder="cotizaciones",
+    content_type="application/octet-stream",
+    unique_name=True,
+):
     """Sube bytes al bucket y devuelve URL firmada. Lanza si Google falla."""
     payload = bytes(data)
     if not payload:
@@ -120,7 +179,11 @@ def upload_bytes_to_gcs(data, filename, folder="cotizaciones", content_type="app
 
     bucket, creds = _gcs_bucket()
     safe_name = (filename or "archivo").replace(" ", "-")
-    blob_path = f"{folder}/{uuid.uuid4()}-{safe_name}"
+    folder = (folder or "cotizaciones").strip("/")
+    if unique_name:
+        blob_path = f"{folder}/{uuid.uuid4()}-{safe_name}"
+    else:
+        blob_path = f"{folder}/{safe_name}"
     blob = bucket.blob(blob_path)
     if content_type == "application/pdf":
         blob.content_disposition = f'inline; filename="{safe_name}"'

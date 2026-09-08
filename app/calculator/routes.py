@@ -1,15 +1,19 @@
 """Rutas HTTP de la calculadora de presupuestos."""
 import os
-import secrets
 from urllib.parse import quote
 
 from flask import Blueprint, jsonify, redirect, request
 from google.cloud import vision
 
 from ..email_service import enviar_lead_interno
-from ..extensions import db
-from ..models import Link
-from ..storage import signed_url_for_blob, upload_bytes_to_gcs
+from ..storage import (
+    codigo_desde_carpeta,
+    comprimir_imagen,
+    nueva_carpeta_cotizacion,
+    carpeta_valida,
+    signed_url_for_blob,
+    upload_bytes_to_gcs,
+)
 from .analyzers import alinear_con_pedido, detectar_muebles
 from .conversion import build_conversion_payload
 from .logistics import calcular_desplazamiento
@@ -42,11 +46,15 @@ def _parse_input():
     descripcion = ""
     direccion_cliente = None
     analisis_previo = None
+    nombre = "cliente"
+    carpeta = None
 
     if request.is_json:
         data = request.json
         descripcion = data.get("descripcion_texto_mueble", "")
         direccion_cliente = data.get("direccion_cliente")
+        nombre = (data.get("client_name") or data.get("nombre") or "cliente").strip()
+        carpeta = data.get("carpeta_gcs")
         analisis_raw = data.get("analisis")
         if analisis_raw and isinstance(analisis_raw, dict) and "items" in analisis_raw:
             analisis_previo = analisis_raw["items"]
@@ -59,8 +67,12 @@ def _parse_input():
     else:
         descripcion = request.form.get("descripcion_texto_mueble", "")
         direccion_cliente = request.form.get("direccion_cliente")
+        nombre = (request.form.get("client_name") or request.form.get("nombre") or "cliente").strip()
+        carpeta = request.form.get("carpeta_gcs")
         files = request.files.getlist("imagen")
         if files and files[0].filename:
+            if not carpeta:
+                carpeta = nueva_carpeta_cotizacion(nombre)
             for index, file in enumerate(files):
                 if not file:
                     continue
@@ -69,15 +81,6 @@ def _parse_input():
                     if not file_content:
                         print(f"⚠️ Imagen {index} vacía (stream consumido o archivo 0 bytes)")
                         continue
-
-                    gcs_url, _blob = upload_bytes_to_gcs(
-                        file_content,
-                        file.filename or f"foto-{index}.jpg",
-                        folder="cotizaciones",
-                        content_type=file.content_type or "image/jpeg",
-                    )
-                    if gcs_url:
-                        image_urls.append(gcs_url)
 
                     if index == 0:
                         vision_client = _get_vision_client()
@@ -88,13 +91,29 @@ def _parse_input():
                                 image_labels = [
                                     label.description for label in response.label_annotations[:5]
                                 ]
+
+                    comprimida, ctype, fname = comprimir_imagen(
+                        file_content,
+                        file.filename or f"foto-{index + 1}.jpg",
+                    )
+                    gcs_url, _blob = upload_bytes_to_gcs(
+                        comprimida,
+                        f"foto-{index + 1}.jpg",
+                        folder=carpeta,
+                        content_type=ctype,
+                        unique_name=False,
+                    )
+                    if gcs_url:
+                        image_urls.append(gcs_url)
                 except Exception as e:  # pylint: disable=broad-exception-caught
                     print(f"❌ Error img {index}: {e}")
 
-    return descripcion, direccion_cliente, analisis_previo, image_urls, image_labels
+    if not carpeta:
+        carpeta = nueva_carpeta_cotizacion(nombre)
+    return descripcion, direccion_cliente, analisis_previo, image_urls, image_labels, carpeta
 
 
-def _build_clarification_response(resultados, image_urls, image_labels):
+def _build_clarification_response(resultados, image_urls, image_labels, carpeta):
     """Respuesta cuando faltan datos — incluye TODAS las preguntas pendientes."""
     preguntas = [
         {"tipo_mueble": item["tipo"], "dato_faltante": item["falta_info"]}
@@ -121,13 +140,14 @@ def _build_clarification_response(resultados, image_urls, image_labels):
         "mensaje": "Se requiere especificar el tamaño o detalles.",
         "image_urls": image_urls,
         "image_labels": image_labels,
+        "carpeta_gcs": carpeta,
     }), 200
 
 
 @calculator_bp.route("/calcular_presupuesto", methods=["POST"])
 def calcular_presupuesto():
     """Endpoint principal para cálculo de presupuestos."""
-    descripcion, direccion, analisis_previo, image_urls, image_labels = _parse_input()
+    descripcion, direccion, analisis_previo, image_urls, image_labels, carpeta = _parse_input()
 
     if analisis_previo:
         muebles_procesados = alinear_con_pedido(descripcion, analisis_previo)
@@ -147,6 +167,7 @@ def calcular_presupuesto():
                 "conversion": conversion,
                 "image_urls": image_urls,
                 "image_labels": image_labels,
+                "carpeta_gcs": carpeta,
             }), 200
 
         if len(muebles_procesados) == 1 and muebles_procesados[0].get("tipo") == "saludo":
@@ -156,10 +177,13 @@ def calcular_presupuesto():
                 "MUEBLE_PROBABLE": "saludo",
                 "mensaje": "Saludo detectado.",
                 "conversion": build_conversion_payload(status="unknown"),
+                "carpeta_gcs": carpeta,
             }), 200
 
         if any(item.get("falta_info") for item in muebles_procesados):
-            return _build_clarification_response(muebles_procesados, image_urls, image_labels)
+            return _build_clarification_response(
+                muebles_procesados, image_urls, image_labels, carpeta
+            )
 
     presupuesto = calcular_presupuesto_items(muebles_procesados)
     logistica = calcular_desplazamiento(direccion)
@@ -196,6 +220,7 @@ def calcular_presupuesto():
         "conversion": conversion,
         "image_urls": image_urls,
         "image_labels": image_labels,
+        "carpeta_gcs": carpeta,
     })
 
 
@@ -234,14 +259,17 @@ def enviar_presupuesto():
     pdf_url = None
     pdf_corto = None
     gcs_error = None
+    carpeta = data.get("carpeta_gcs") or nueva_carpeta_cotizacion(nombre)
     try:
         pdf_url, blob_path = upload_bytes_to_gcs(
             pdf_bytes,
             "presupuesto-kiq.pdf",
-            folder="cotizaciones",
+            folder=carpeta,
             content_type="application/pdf",
+            unique_name=False,
         )
-        pdf_corto = _acortar_pdf(blob_path)
+        pdf_corto = _enlace_pdf_corto(carpeta)
+        print(f"PDF corto={pdf_corto} blob={blob_path}")
     except Exception as err:  # pylint: disable=broad-exception-caught
         gcs_error = str(err)
         print(f"❌ No se pudo subir el PDF a Google Storage: {gcs_error}")
@@ -283,39 +311,23 @@ def enviar_presupuesto():
     })
 
 
-def _acortar_pdf(blob_path: str) -> str | None:
-    """Guarda la ruta del PDF y devuelve un enlace corto /p/xxxx."""
-    if not blob_path:
-        return None
-    try:
-        for _ in range(8):
-            code = secrets.token_urlsafe(6).replace("-", "").replace("_", "")[:8]
-            if len(code) < 6:
-                continue
-            if Link.query.filter_by(short_code=code).first():
-                continue
-            db.session.add(Link(original_url=blob_path[:512], short_code=code))
-            db.session.commit()
-            base = (
-                os.getenv("PUBLIC_API_URL")
-                or os.getenv("PUBLIC_BASE_URL")
-                or "https://kiq-calculadora.onrender.com"
-            ).rstrip("/")
-            return f"{base}/p/{code}"
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        db.session.rollback()
-        print(f"⚠️ No se pudo acortar el PDF: {exc}")
-    return None
+def _enlace_pdf_corto(carpeta: str) -> str:
+    code = codigo_desde_carpeta(carpeta)
+    base = (
+        os.getenv("PUBLIC_API_URL")
+        or os.getenv("PUBLIC_BASE_URL")
+        or "https://kiq-calculadora.onrender.com"
+    ).rstrip("/")
+    return f"{base}/p/{code}"
 
 
 @calculator_bp.route("/p/<code>", methods=["GET"])
 def abrir_pdf_corto(code):
     """Redirige un enlace corto a una URL firmada de GCS."""
-    link = Link.query.filter_by(short_code=code).first()
-    if not link:
+    if not carpeta_valida(code):
         return "Presupuesto no encontrado", 404
     try:
-        url = signed_url_for_blob(link.original_url)
+        url = signed_url_for_blob(f"cotizaciones/{code}/presupuesto-kiq.pdf")
         return redirect(url)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         print(f"❌ No se pudo abrir PDF corto {code}: {exc}")
