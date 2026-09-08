@@ -7,6 +7,15 @@ from app.calculator.analyzers import analizar_con_keywords, find_furniture_keywo
 
 
 class TestKeywordDetection(unittest.TestCase):
+    def test_una_mesa_simple(self):
+        tipos = find_furniture_keywords("una mesa")
+        self.assertIn("mesa_comedor", tipos)
+
+    def test_mesita_no_es_mesa_comedor(self):
+        tipos = find_furniture_keywords("una mesita de noche")
+        self.assertIn("mesita_noche", tipos)
+        self.assertNotIn("mesa_comedor", tipos)
+
     def test_mesa_comedor_multi_palabra(self):
         tipos = find_furniture_keywords("necesito montar una mesa comedor")
         self.assertIn("mesa_comedor", tipos)

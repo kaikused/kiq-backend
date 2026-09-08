@@ -58,7 +58,7 @@ def _extract_cantidad(texto_lower: str, tipo: str) -> int:
 
 
 def find_furniture_keywords(texto: str) -> list[str]:
-    """Busca tipos de mueble por keywords (multi-palabra primero)."""
+    """Busca tipos de mueble por keywords (multi-palabra primero, con límite de palabra)."""
     texto_lower = texto.lower()
     encontrados = []
     usado = set()
@@ -72,7 +72,7 @@ def find_furniture_keywords(texto: str) -> list[str]:
     for _, key, kw in entries:
         if key in usado:
             continue
-        if kw in texto_lower:
+        if re.search(rf"\b{re.escape(kw)}\b", texto_lower):
             encontrados.append(key)
             usado.add(key)
 
@@ -208,6 +208,25 @@ def merge_detections(text_results: list[dict], vision_results: list[dict]) -> li
     return merged
 
 
+TIPO_ALIASES = {
+    "mesa": "mesa_comedor",
+    "mesas": "mesa_comedor",
+    "table": "mesa_comedor",
+    "comedor": "mesa_comedor",
+    "ropero": "armario",
+    "placard": "armario",
+    "somier": "cama",
+    "sillon": "sofa",
+    "sillón": "sofa",
+}
+
+
+def _normalize_tipo(tipo: str) -> str:
+    if tipo in TARIFARIO or tipo == "saludo":
+        return tipo
+    return TIPO_ALIASES.get((tipo or "").lower(), tipo)
+
+
 def detectar_muebles(
     descripcion: str,
     image_labels: list[str] | None = None,
@@ -222,11 +241,20 @@ def detectar_muebles(
     else:
         texto_lower = descripcion.lower()
         for item in resultados:
+            item["tipo"] = _normalize_tipo(item.get("tipo", ""))
             if item.get("tipo") == "saludo":
+                continue
+            if item["tipo"] not in TARIFARIO:
                 continue
             item.setdefault("atributos", {})
             item["falta_info"] = []
             _enrich_item(item, texto_lower)
+        resultados = [
+            i for i in resultados
+            if i.get("tipo") in TARIFARIO or i.get("tipo") == "saludo"
+        ]
+        if not resultados:
+            resultados = analizar_con_spacy_basico(descripcion)
 
     vision_results = detect_from_vision_labels(image_labels)
     return merge_detections(resultados or [], vision_results)

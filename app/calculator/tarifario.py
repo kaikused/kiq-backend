@@ -79,7 +79,14 @@ TARIFARIO = {
     "mesa_comedor": {
         "precio_base": 49,
         "necesita_anclaje": False,
-        "keywords": ["mesa comedor", "dining table"],
-        "display_name": {"es": "Mesa Comedor"},
+        "keywords": [
+            "mesa comedor",
+            "mesa de comedor",
+            "dining table",
+            "mesas",
+            "mesa",
+            "table",
+        ],
+        "display_name": {"es": "Mesa"},
     },
 }
