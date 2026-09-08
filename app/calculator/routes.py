@@ -1,10 +1,23 @@
 """Rutas HTTP de la calculadora de presupuestos."""
+import os
 from io import BytesIO
+from urllib.parse import quote
 
 from flask import Blueprint, jsonify, request
 from google.cloud import vision
 
-from ..storage import upload_image_to_gcs
+from ..email_service import enviar_lead_interno
+from ..storage import upload_bytes_to_gcs, upload_image_to_gcs
+from .analyzers import detectar_muebles
+from .conversion import build_conversion_payload
+from .logistics import calcular_desplazamiento
+from .pdf import generar_pdf_presupuesto
+from .pricing import (
+    calcular_presupuesto_items,
+    calcular_presupuesto_parcial,
+    total_final,
+)
+from .tarifario import TARIFARIO
 from .analyzers import detectar_muebles
 from .conversion import build_conversion_payload
 from .logistics import calcular_desplazamiento
@@ -196,4 +209,47 @@ def get_tarifario_publico():
         "status": "success",
         "items": sorted(items, key=lambda x: x["precio_desde"]),
         "conversion": build_conversion_payload(status="unknown"),
+    })
+
+
+@calculator_bp.route("/enviar_presupuesto", methods=["POST"])
+def enviar_presupuesto():
+    """Genera PDF, lo envía a fqvdo7@gmail.com y abre WhatsApp con el resumen."""
+    data = request.get_json(silent=True) or {}
+    nombre = (data.get("nombre") or "Cliente").strip()
+    email = (data.get("email") or "").strip()
+    telefono = (data.get("telefono") or "").strip()
+    precio = data.get("precio_calculado") or 0
+
+    pdf_bytes = generar_pdf_presupuesto(data)
+    pdf_url = upload_bytes_to_gcs(pdf_bytes, "presupuesto-kiq.pdf")
+
+    leads_email = os.getenv("LEADS_EMAIL", "fqvdo7@gmail.com")
+    whatsapp_kiq = os.getenv("WHATSAPP_KIQ", "34664497889")
+
+    extra = (
+        f"<p>Email cliente: {email or '—'}</p>"
+        f"<p>Teléfono: {telefono or '—'}</p>"
+        f"<p>Zona: {data.get('direccion') or '—'}</p>"
+        f"<p>Descripción: {data.get('descripcion') or '—'}</p>"
+        f"<p>PDF: {pdf_url or 'adjunto'}</p>"
+    )
+
+    enviar_lead_interno(leads_email, nombre, precio, pdf_bytes, extra)
+
+    mensaje_wa = (
+        f"Hola, soy {nombre}. He pedido un presupuesto de montaje en Kiq.\n"
+        f"Total estimado: {precio}€\n"
+        f"Zona: {data.get('direccion') or 'pendiente'}\n"
+        f"Qué montar: {data.get('descripcion') or 'muebles'}\n"
+    )
+    if pdf_url:
+        mensaje_wa += f"PDF: {pdf_url}\n"
+    whatsapp_url = f"https://wa.me/{whatsapp_kiq}?text={quote(mensaje_wa)}"
+
+    return jsonify({
+        "status": "success",
+        "enviado_interno": True,
+        "pdf_url": pdf_url,
+        "whatsapp_url": whatsapp_url,
     })

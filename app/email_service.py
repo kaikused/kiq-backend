@@ -2,6 +2,7 @@
 Módulo para el envío de correos electrónicos transaccionales usando Resend.
 """
 import os
+import base64
 import resend
 from dotenv import load_dotenv
 
@@ -14,7 +15,7 @@ resend.api_key = os.getenv('RESEND_API_KEY')
 # Configuración del remitente
 REMITENTE_DEFAULT = "Kiq Montajes <info@kiq.es>"
 
-def enviar_email_generico(destinatario, asunto, contenido_html):
+def enviar_email_generico(destinatario, asunto, contenido_html, attachments=None, bcc=None):
     """
     Función base para enviar cualquier correo.
     Captura cualquier error para evitar romper el flujo principal.
@@ -22,10 +23,14 @@ def enviar_email_generico(destinatario, asunto, contenido_html):
     try:
         params = {
             "from": REMITENTE_DEFAULT,
-            "to": [destinatario],
+            "to": [destinatario] if isinstance(destinatario, str) else destinatario,
             "subject": asunto,
             "html": contenido_html,
         }
+        if bcc:
+            params["bcc"] = bcc if isinstance(bcc, list) else [bcc]
+        if attachments:
+            params["attachments"] = attachments
 
         email = resend.Emails.send(params)
         print(f"📧 Email enviado a {destinatario}: ID {email.get('id')}")
@@ -92,4 +97,54 @@ def enviar_codigo_verificacion(email_destino, codigo):
         destinatario=email_destino,
         asunto=f"🔐 Tu código de seguridad: {codigo}",
         contenido_html=html_content
+    )
+
+
+def enviar_presupuesto_con_pdf(destinatario, nombre, precio, pdf_bytes, copia_interna=None):
+    """Envía el presupuesto en PDF al cliente y opcionalmente copia interna."""
+    adjunto = [{
+        "filename": "presupuesto-kiq.pdf",
+        "content": base64.b64encode(pdf_bytes).decode("utf-8"),
+    }]
+    html_content = f"""
+    <div style="font-family: sans-serif; color: #333; max-width: 600px; margin: 0 auto;">
+        <h1 style="color: #6d28d9;">¡Hola, {nombre}!</h1>
+        <p>Aquí tienes tu presupuesto de <strong>Kiq Montajes</strong> en PDF.</p>
+        <div style="background-color: #f3f4f6; padding: 20px; border-radius: 10px; margin: 20px 0;">
+            <h2 style="margin-top: 0;">Total estimado: {precio}€</h2>
+            <p>Incluye montaje profesional y desplazamiento. Un montador de tu zona te confirmará el detalle.</p>
+        </div>
+        <p>Si quieres reservar, responde a este correo o escríbenos por WhatsApp.</p>
+        <p style="font-size: 12px; color: #999;">Kiq Technologies · kiq.es</p>
+    </div>
+    """
+    return enviar_email_generico(
+        destinatario=destinatario,
+        asunto=f"Tu presupuesto Kiq: {precio}€",
+        contenido_html=html_content,
+        attachments=adjunto,
+        bcc=copia_interna,
+    )
+
+
+def enviar_lead_interno(destinatario, nombre, precio, pdf_bytes, extra_html=""):
+    """Copia interna para que Kiq reciba siempre el lead."""
+    adjunto = [{
+        "filename": "presupuesto-kiq.pdf",
+        "content": base64.b64encode(pdf_bytes).decode("utf-8"),
+    }]
+    html_content = f"""
+    <div style="font-family: sans-serif; color: #333; max-width: 600px; margin: 0 auto;">
+        <h1>Nuevo lead de cotización</h1>
+        <p><strong>Cliente:</strong> {nombre}</p>
+        <p><strong>Total:</strong> {precio}€</p>
+        {extra_html}
+        <p>El PDF va adjunto.</p>
+    </div>
+    """
+    return enviar_email_generico(
+        destinatario=destinatario,
+        asunto=f"Lead cotización: {nombre} · {precio}€",
+        contenido_html=html_content,
+        attachments=adjunto,
     )

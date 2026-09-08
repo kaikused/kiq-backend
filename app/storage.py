@@ -59,3 +59,20 @@ def upload_image_to_gcs(file, folder="misc"):
         # Capturamos Exception genérico para que la app no se caiga si falla la nube
         print(f"❌ Error crítico subiendo a GCS: {e}")
         return None
+
+
+def upload_bytes_to_gcs(data, filename, folder="presupuestos", content_type="application/pdf"):
+    """Sube bytes a GCS y retorna la URL pública."""
+    try:
+        if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
+            init_storage()
+
+        client = storage.Client()
+        bucket = client.bucket(BUCKET_NAME)
+        blob_path = f"{folder}/{uuid.uuid4()}-{filename}"
+        blob = bucket.blob(blob_path)
+        blob.upload_from_string(data, content_type=content_type)
+        return blob.public_url
+    except Exception as e:  # pylint: disable=broad-except
+        print(f"❌ Error subiendo PDF a GCS: {e}")
+        return None
