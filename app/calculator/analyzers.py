@@ -93,7 +93,9 @@ CATÁLOGO: {keys_muebles}
 OBJETIVOS:
 1. Si el usuario SOLO saluda y NO pide muebles -> {{ "tipo": "saludo", "cantidad": 0 }}
 
-2. Si menciona muebles, extrae datos (MODO ESTRICTO):
+2. Si menciona muebles, extrae SOLO los que el cliente pide en el texto.
+   No inventes muebles extra. Ignora cualquier cosa que no esté escrita.
+   Extrae datos (MODO ESTRICTO):
    - ARMARIOS:
      * ¿Tipo puerta? (corredera/batiente). SI FALTA -> "falta_info": ["tipo_puerta"].
      * ¿Cantidad puertas? SI FALTA -> "falta_info": ["num_puertas"].
@@ -180,32 +182,43 @@ def analizar_con_spacy_basico(descripcion: str) -> list[dict]:
 
 
 def merge_detections(text_results: list[dict], vision_results: list[dict]) -> list[dict]:
-    """Combina detecciones de texto e imagen, evitando duplicados."""
-    if not text_results and vision_results:
-        return vision_results
-    if not vision_results:
-        return text_results
+    """
+    El texto del cliente manda. Vision solo confirma lo ya pedido.
+    No añade muebles extra que salgan en la foto de fondo.
+    """
+    text_items = [
+        item for item in (text_results or [])
+        if item.get("tipo") and item.get("tipo") != "saludo"
+    ]
+    if text_items:
+        by_tipo = {}
+        merged = []
+        for item in text_items:
+            by_tipo[item["tipo"]] = item
+            merged.append(item)
+        for v_item in vision_results or []:
+            tipo = v_item.get("tipo")
+            if tipo in by_tipo:
+                existing = by_tipo[tipo]
+                existing["confianza"] = min(1.0, existing.get("confianza", 0.7) + 0.1)
+                existing["fuente"] = f"{existing.get('fuente', 'texto')}+vision"
+        return merged
 
-    merged = []
-    by_tipo = {}
+    return vision_results or []
 
-    for item in text_results:
-        by_tipo[item["tipo"]] = item
-        merged.append(item)
 
-    for v_item in vision_results:
-        tipo = v_item["tipo"]
-        if tipo in by_tipo:
-            existing = by_tipo[tipo]
-            existing["confianza"] = min(
-                1.0, existing.get("confianza", 0.7) + 0.1
-            )
-            existing["fuente"] = f"{existing.get('fuente', 'texto')}+vision"
-        else:
-            merged.append(v_item)
-            by_tipo[tipo] = v_item
-
-    return merged
+def alinear_con_pedido(descripcion: str, items: list[dict]) -> list[dict]:
+    """Quita muebles que no están en el texto si el cliente ya dijo qué quiere."""
+    pedidos = set(find_furniture_keywords(descripcion or ""))
+    if not pedidos:
+        return items or []
+    filtrados = [
+        item for item in (items or [])
+        if item.get("tipo") in pedidos
+    ]
+    if filtrados:
+        return filtrados
+    return analizar_con_keywords(descripcion)
 
 
 TIPO_ALIASES = {

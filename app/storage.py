@@ -127,7 +127,14 @@ def upload_bytes_to_gcs(data, filename, folder="cotizaciones", content_type="app
     blob.upload_from_string(payload, content_type=content_type)
     url = _signed_url(blob, creds)
     print(f"✅ GCS OK gs://{BUCKET_NAME}/{blob_path} ({len(payload)} bytes)")
-    return url
+    return url, blob_path
+
+
+def signed_url_for_blob(blob_path: str) -> str:
+    """Regenera una URL firmada a partir de la ruta del objeto."""
+    bucket, creds = _gcs_bucket()
+    blob = bucket.blob(blob_path)
+    return _signed_url(blob, creds)
 
 
 def upload_image_to_gcs(file, folder="misc"):
@@ -136,12 +143,13 @@ def upload_image_to_gcs(file, folder="misc"):
         filename = getattr(file, "filename", None) or "foto.jpg"
         content_type = getattr(file, "content_type", None) or "image/jpeg"
         payload = _read_bytes(file)
-        return upload_bytes_to_gcs(
+        url, _path = upload_bytes_to_gcs(
             payload,
             filename,
             folder=folder,
             content_type=content_type,
         )
+        return url
     except Exception as exc:  # pylint: disable=broad-exception-caught
         print(f"❌ Error subiendo imagen a GCS ({BUCKET_NAME}): {exc}")
         return None

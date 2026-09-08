@@ -120,6 +120,15 @@ def _add_fotos(pdf: PresupuestoPDF, image_urls: list):
     pdf.set_text_color(30, 30, 30)
     pdf.set_font("Helvetica", "B", 11)
     pdf.cell(0, 8, "Fotos de referencia", ln=True)
+    pdf.set_font("Helvetica", "", 8)
+    pdf.set_text_color(80, 80, 80)
+    pdf.multi_cell(
+        0,
+        4,
+        _txt("La foto es solo apoyo visual. El pedido cotizado es el de la descripcion, no otros muebles que aparezcan en la imagen."),
+    )
+    pdf.set_text_color(30, 30, 30)
+    pdf.ln(2)
 
     x_start = pdf.get_x()
     y = pdf.get_y()

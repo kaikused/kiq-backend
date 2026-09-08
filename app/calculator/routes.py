@@ -1,13 +1,16 @@
 """Rutas HTTP de la calculadora de presupuestos."""
 import os
+import secrets
 from urllib.parse import quote
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, redirect, request
 from google.cloud import vision
 
 from ..email_service import enviar_lead_interno
-from ..storage import upload_bytes_to_gcs
-from .analyzers import detectar_muebles
+from ..extensions import db
+from ..models import Link
+from ..storage import signed_url_for_blob, upload_bytes_to_gcs
+from .analyzers import alinear_con_pedido, detectar_muebles
 from .conversion import build_conversion_payload
 from .logistics import calcular_desplazamiento
 from .pdf import generar_pdf_presupuesto
@@ -67,7 +70,7 @@ def _parse_input():
                         print(f"⚠️ Imagen {index} vacía (stream consumido o archivo 0 bytes)")
                         continue
 
-                    gcs_url = upload_bytes_to_gcs(
+                    gcs_url, _blob = upload_bytes_to_gcs(
                         file_content,
                         file.filename or f"foto-{index}.jpg",
                         folder="cotizaciones",
@@ -127,9 +130,12 @@ def calcular_presupuesto():
     descripcion, direccion, analisis_previo, image_urls, image_labels = _parse_input()
 
     if analisis_previo:
-        muebles_procesados = analisis_previo
+        muebles_procesados = alinear_con_pedido(descripcion, analisis_previo)
     else:
-        muebles_procesados = detectar_muebles(descripcion, image_labels)
+        muebles_procesados = alinear_con_pedido(
+            descripcion,
+            detectar_muebles(descripcion, image_labels),
+        )
 
         if not muebles_procesados:
             conversion = build_conversion_payload(status="unknown")
@@ -226,13 +232,16 @@ def enviar_presupuesto():
 
     pdf_bytes = generar_pdf_presupuesto(data)
     pdf_url = None
+    pdf_corto = None
     gcs_error = None
     try:
-        pdf_url = upload_bytes_to_gcs(
+        pdf_url, blob_path = upload_bytes_to_gcs(
             pdf_bytes,
             "presupuesto-kiq.pdf",
             folder="cotizaciones",
+            content_type="application/pdf",
         )
+        pdf_corto = _acortar_pdf(blob_path)
     except Exception as err:  # pylint: disable=broad-exception-caught
         gcs_error = str(err)
         print(f"❌ No se pudo subir el PDF a Google Storage: {gcs_error}")
@@ -245,7 +254,7 @@ def enviar_presupuesto():
         f"<p>Teléfono: {telefono or '—'}</p>"
         f"<p>Zona: {data.get('direccion') or '—'}</p>"
         f"<p>Descripción: {data.get('descripcion') or '—'}</p>"
-        f"<p>PDF: {pdf_url or 'adjunto'}</p>"
+        f"<p>PDF: {pdf_corto or pdf_url or 'adjunto'}</p>"
     )
 
     enviado_ok = enviar_lead_interno(leads_email, nombre, precio, pdf_bytes, extra)
@@ -257,8 +266,9 @@ def enviar_presupuesto():
         f"Zona: {data.get('direccion') or 'pendiente'}\n"
         f"Qué montar: {data.get('descripcion') or 'muebles'}\n"
     )
-    if pdf_url:
-        mensaje_wa += f"PDF: {pdf_url}\n"
+    link_pdf = pdf_corto or pdf_url
+    if link_pdf:
+        mensaje_wa += f"PDF: {link_pdf}\n"
     else:
         mensaje_wa += "El PDF te lo enviamos por correo a Kiq.\n"
     whatsapp_url = f"https://wa.me/{whatsapp_kiq}?text={quote(mensaje_wa)}"
@@ -266,7 +276,47 @@ def enviar_presupuesto():
     return jsonify({
         "status": "success",
         "enviado_interno": enviado_ok,
-        "pdf_url": pdf_url,
+        "pdf_url": link_pdf,
+        "pdf_url_firmada": pdf_url,
         "gcs_error": gcs_error,
         "whatsapp_url": whatsapp_url,
     })
+
+
+def _acortar_pdf(blob_path: str) -> str | None:
+    """Guarda la ruta del PDF y devuelve un enlace corto /p/xxxx."""
+    if not blob_path:
+        return None
+    try:
+        for _ in range(8):
+            code = secrets.token_urlsafe(6).replace("-", "").replace("_", "")[:8]
+            if len(code) < 6:
+                continue
+            if Link.query.filter_by(short_code=code).first():
+                continue
+            db.session.add(Link(original_url=blob_path[:512], short_code=code))
+            db.session.commit()
+            base = (
+                os.getenv("PUBLIC_API_URL")
+                or os.getenv("PUBLIC_BASE_URL")
+                or "https://kiq-calculadora.onrender.com"
+            ).rstrip("/")
+            return f"{base}/p/{code}"
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        db.session.rollback()
+        print(f"⚠️ No se pudo acortar el PDF: {exc}")
+    return None
+
+
+@calculator_bp.route("/p/<code>", methods=["GET"])
+def abrir_pdf_corto(code):
+    """Redirige un enlace corto a una URL firmada de GCS."""
+    link = Link.query.filter_by(short_code=code).first()
+    if not link:
+        return "Presupuesto no encontrado", 404
+    try:
+        url = signed_url_for_blob(link.original_url)
+        return redirect(url)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        print(f"❌ No se pudo abrir PDF corto {code}: {exc}")
+        return "No se pudo abrir el PDF", 500

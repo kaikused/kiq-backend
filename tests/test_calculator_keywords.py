@@ -3,7 +3,7 @@ import unittest
 
 import tests.bootstrap  # noqa: F401
 
-from app.calculator.analyzers import analizar_con_keywords, find_furniture_keywords
+from app.calculator.analyzers import alinear_con_pedido, analizar_con_keywords, find_furniture_keywords
 
 
 class TestKeywordDetection(unittest.TestCase):
@@ -23,6 +23,17 @@ class TestKeywordDetection(unittest.TestCase):
     def test_mueble_tv_multi_palabra(self):
         tipos = find_furniture_keywords("mueble tv blanco ikea")
         self.assertIn("mueble_tv", tipos)
+
+    def test_foto_no_anade_mueble_que_no_pidio(self):
+        items = [
+            {"tipo": "armario", "cantidad": 1},
+            {"tipo": "mueble_tv", "cantidad": 1},
+        ]
+        filtrados = alinear_con_pedido(
+            "armario de puertas batientes de 2 puertas",
+            items,
+        )
+        self.assertEqual([i["tipo"] for i in filtrados], ["armario"])
 
     def test_dos_armarios_cantidad(self):
         items = analizar_con_keywords("2 armarios pax corredera 3 puertas")

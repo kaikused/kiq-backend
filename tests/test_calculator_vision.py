@@ -25,10 +25,16 @@ class TestVisionDetection(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         self.assertIn("vision", merged[0]["fuente"])
 
-    def test_vision_adds_missing_item(self):
+    def test_vision_does_not_add_extra_furniture(self):
         text = [{"tipo": "cama", "cantidad": 1, "atributos": {"medida": "150"}, "falta_info": [], "confianza": 0.8, "fuente": "gemini"}]
-        vision = detect_from_vision_labels(["Nightstand", "Bed"])
+        vision = detect_from_vision_labels(["Nightstand", "Bed", "Television"])
         merged = merge_detections(text, vision)
+        tipos = {i["tipo"] for i in merged}
+        self.assertEqual(tipos, {"cama"})
+
+    def test_vision_only_when_no_text(self):
+        vision = detect_from_vision_labels(["Nightstand", "Bed"])
+        merged = merge_detections([], vision)
         tipos = {i["tipo"] for i in merged}
         self.assertIn("cama", tipos)
         self.assertIn("mesita_noche", tipos)
