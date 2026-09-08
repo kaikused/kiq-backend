@@ -14,6 +14,10 @@ class TestVisionDetection(unittest.TestCase):
         self.assertEqual(items[0]["tipo"], "armario")
         self.assertEqual(items[0]["fuente"], "vision")
 
+    def test_detect_shelf_as_balda(self):
+        items = detect_from_vision_labels(["Shelving", "Shelf", "Wall"])
+        self.assertEqual(items[0]["tipo"], "balda")
+
     def test_detect_sofa(self):
         items = detect_from_vision_labels(["Couch", "Living room"])
         self.assertEqual(items[0]["tipo"], "sofa")

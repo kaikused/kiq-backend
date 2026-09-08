@@ -35,6 +35,12 @@ class TestKeywordDetection(unittest.TestCase):
         )
         self.assertEqual([i["tipo"] for i in filtrados], ["armario"])
 
+    def test_una_balda_colgada(self):
+        tipos = find_furniture_keywords("una balda colgada")
+        self.assertIn("balda", tipos)
+        items = analizar_con_keywords("una balda")
+        self.assertEqual(items[0]["tipo"], "balda")
+
     def test_dos_armarios_cantidad(self):
         items = analizar_con_keywords("2 armarios pax corredera 3 puertas")
         armarios = [i for i in items if i["tipo"] == "armario"]

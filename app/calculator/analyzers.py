@@ -231,6 +231,11 @@ TIPO_ALIASES = {
     "somier": "cama",
     "sillon": "sofa",
     "sillón": "sofa",
+    "estante": "balda",
+    "estantes": "balda",
+    "baldas": "balda",
+    "shelf": "balda",
+    "shelving": "balda",
 }
 
 

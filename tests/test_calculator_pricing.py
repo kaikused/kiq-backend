@@ -45,6 +45,13 @@ class TestPricingEngine(unittest.TestCase):
         totales = total_final(10, 0, 5, False)
         self.assertEqual(totales["total_presupuesto"], 30)
 
+    def test_balda_con_anclaje(self):
+        result = calcular_precio_item("balda", 1, {})
+        self.assertEqual(result["precio_unitario"], 30)
+        self.assertTrue(result["necesita_anclaje"])
+        presupuesto = calcular_presupuesto_items([{"tipo": "balda", "cantidad": 1, "atributos": {}}])
+        self.assertTrue(presupuesto["anclaje_global"])
+
 
 if __name__ == "__main__":
     unittest.main()

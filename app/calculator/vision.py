@@ -31,7 +31,9 @@ VISION_LABEL_MAP = {
     "display cabinet": "vitrina",
     "cabinet": "vitrina",
     "bookcase": "vitrina",
-    "shelf": "vitrina",
+    "shelf": "balda",
+    "shelving": "balda",
+    "floating shelf": "balda",
 }
 
 

@@ -73,8 +73,25 @@ TARIFARIO = {
     "vitrina": {
         "precio_base": 99,
         "necesita_anclaje": True,
-        "keywords": ["vitrina", "aparador", "display cabinet", "cabinet"],
+        "keywords": ["vitrina", "aparador", "estantería", "estanteria", "display cabinet", "cabinet", "bookcase"],
         "display_name": {"es": "Vitrina"},
+    },
+    "balda": {
+        "precio_base": 30,
+        "necesita_anclaje": True,
+        "keywords": [
+            "balda colgada",
+            "baldas colgadas",
+            "floating shelf",
+            "floating shelves",
+            "baldas",
+            "balda",
+            "estantes",
+            "estante",
+            "repisas",
+            "repisa",
+        ],
+        "display_name": {"es": "Balda"},
     },
     "mesa_comedor": {
         "precio_base": 49,
