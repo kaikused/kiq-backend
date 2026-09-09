@@ -34,6 +34,8 @@ from app.jobs import publicar_trabajo as publicar_trabajo_tablero
 from app.jobs import (
     aplicar_cobro,
     aplicar_estado,
+    armar_presupuesto_manual,
+    crear_trabajo_desde_presupuesto,
     ficha_es_invitado,
     metodo_cobro_publico,
     regenerar_pdf_trabajo,
@@ -888,6 +890,44 @@ def admin_publicar_trabajo(job_id):
         db.session.rollback()
         print(f"Error admin publicar: {e}")
         return jsonify({'error': 'No se pudo publicar'}), 500
+
+
+@auth_bp.route('/admin/cotizar-manual', methods=['POST'])
+def admin_cotizar_manual():
+    """Formulario admin: tarifario + ficha visitante + PDF."""
+    if not _validar_admin_token():
+        return jsonify({'error': 'Acceso denegado. Token inválido.'}), 401
+
+    data = request.json or {}
+    try:
+        preview, payload = armar_presupuesto_manual(data)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        print(f"Error cotizar manual: {e}")
+        return jsonify({'error': 'No se pudo calcular'}), 500
+
+    if not data.get("guardar"):
+        return jsonify(preview), 200
+
+    try:
+        trabajo = crear_trabajo_desde_presupuesto(payload, cliente_id=None)
+        aplicar_cobro(trabajo, {
+            "metodo_pago": data.get("metodo_pago"),
+            "zona": data.get("zona") or payload.get("direccion"),
+            "fecha_visita": data.get("fecha_visita"),
+        })
+        regenerar_pdf_trabajo(trabajo)
+        db.session.commit()
+        out = _trabajo_admin_json(trabajo)
+        out["preview"] = preview
+        out["pdf_actualizado"] = True
+        return jsonify(out), 201
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        db.session.rollback()
+        print(f"Error guardando cotización manual: {e}")
+        return jsonify({'error': 'No se pudo guardar la ficha'}), 500
+
 
 @auth_bp.route('/admin/usuarios', methods=['GET'])
 def admin_get_usuarios():

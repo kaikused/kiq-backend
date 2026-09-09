@@ -276,3 +276,88 @@ def regenerar_pdf_trabajo(trabajo):
     )
     trabajo.pdf_carpeta = carpeta
     return carpeta
+
+
+def armar_presupuesto_manual(data: dict):
+    """Tarifario + desplazamiento a partir de líneas de formulario admin."""
+    from app.calculator.logistics import calcular_desplazamiento
+    from app.calculator.pricing import calcular_presupuesto_items, total_final
+    from app.calculator.tarifario import TARIFARIO
+
+    lineas = data.get("items") or []
+    items = []
+    for linea in lineas:
+        tipo = (linea.get("tipo") or "").strip()
+        if tipo not in TARIFARIO:
+            continue
+        try:
+            cantidad = max(1, int(linea.get("cantidad") or 1))
+        except (TypeError, ValueError):
+            cantidad = 1
+        attrs = {}
+        if tipo == "armario":
+            attrs["tipo_puerta"] = (linea.get("tipo_puerta") or "batiente").strip()
+            try:
+                attrs["num_puertas"] = int(linea.get("num_puertas") or 2)
+            except (TypeError, ValueError):
+                attrs["num_puertas"] = 2
+        if tipo in ("canape", "cama"):
+            medida = linea.get("medida")
+            if medida:
+                attrs["medida"] = str(medida)
+        items.append({"tipo": tipo, "cantidad": cantidad, "atributos": attrs})
+
+    if not items:
+        raise ValueError("Añade al menos un mueble del tarifario")
+
+    presupuesto = calcular_presupuesto_items(items)
+    direccion = (data.get("direccion") or data.get("zona") or "").strip()
+    logistica = calcular_desplazamiento(direccion)
+    anclaje = presupuesto["anclaje_global"]
+    if data.get("anclaje") is not None:
+        anclaje = bool(data.get("anclaje"))
+    totales = total_final(
+        presupuesto["coste_muebles_base"],
+        presupuesto["coste_extras"],
+        logistica["coste_desplazamiento"],
+        anclaje,
+        consulta=False,
+    )
+    nombres = [
+        f"{it['cantidad']}x {it['item']}" for it in presupuesto["muebles_cotizados"]
+    ]
+    descripcion = (data.get("descripcion") or "").strip() or ", ".join(nombres)
+    desglose = {
+        "muebles_cotizados": presupuesto["muebles_cotizados"],
+        "coste_muebles_base": presupuesto["coste_muebles_base"],
+        "extras_calculados": presupuesto["coste_extras"],
+        "coste_desplazamiento": logistica["coste_desplazamiento"],
+        "coste_anclaje_estimado": totales["coste_anclaje"],
+        "detalles_extras": presupuesto["detalles_factura"],
+        "distancia_km": logistica["distancia_km"],
+        "consulta_manual": False,
+        "origen": "admin_manual",
+    }
+    preview = {
+        "total": totales["total_presupuesto"],
+        "desplazamiento": logistica["coste_desplazamiento"],
+        "distancia_km": logistica["distancia_km"],
+        "anclaje": totales["coste_anclaje"],
+        "muebles": presupuesto["coste_muebles_base"],
+        "extras": presupuesto["coste_extras"],
+        "lineas": presupuesto["muebles_cotizados"],
+        "detalles": presupuesto["detalles_factura"],
+        "descripcion": descripcion,
+    }
+    payload = {
+        "nombre": (data.get("nombre") or "Visitante").strip() or "Visitante",
+        "email": (data.get("email") or "").strip(),
+        "telefono": (data.get("telefono") or "").strip(),
+        "descripcion": descripcion,
+        "direccion": direccion or "a confirmar",
+        "precio_calculado": totales["total_presupuesto"],
+        "desglose": desglose,
+        "imagenes": [],
+        "etiquetas": {"origen": "invitado", "canal": "telefono"},
+    }
+    return preview, payload
