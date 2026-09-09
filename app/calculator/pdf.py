@@ -78,6 +78,7 @@ def generar_pdf_presupuesto(payload: dict) -> bytes:
     email = _txt(_email_para_pdf(payload.get("email")))
     fecha_visita = _fecha_visita_txt(payload.get("fecha_visita"))
     metodo_pago = _pago_txt(payload.get("metodo_pago"))
+    cobrado = bool(payload.get("cobrado"))
     desglose = payload.get("desglose") or {}
     consulta = bool(payload.get("consulta_manual") or desglose.get("consulta_manual"))
     titulo = "Consulta de montaje" if consulta else "Presupuesto de montaje"
@@ -105,6 +106,15 @@ def generar_pdf_presupuesto(payload: dict) -> bytes:
         pdf.cell(0, 6, f"Fecha y hora del montaje: {fecha_visita}", ln=True)
     if metodo_pago:
         pdf.cell(0, 6, f"Metodo de pago: {metodo_pago}", ln=True)
+    if cobrado:
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(*MARCA)
+        extra_pago = f" ({metodo_pago})" if metodo_pago else ""
+        pdf.cell(0, 6, f"PAGADO POR ANTICIPADO{extra_pago}", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(30, 30, 30)
+    else:
+        pdf.cell(0, 6, "Estado de cobro: Pendiente", ln=True)
     pdf.ln(2)
     pdf.set_font("Helvetica", "B", 11)
     pdf.cell(0, 7, "Que hay que montar", ln=True)
@@ -160,6 +170,10 @@ def generar_pdf_presupuesto(payload: dict) -> bytes:
         pdf.set_font("Helvetica", "B", 16)
         pdf.set_text_color(*MARCA)
         pdf.cell(0, 10, f"Total estimado: {float(precio or 0):.0f} EUR", ln=True)
+        if cobrado:
+            pdf.set_font("Helvetica", "B", 11)
+            extra_pago = f" por {metodo_pago}" if metodo_pago else ""
+            pdf.cell(0, 8, f"PAGADO POR ANTICIPADO{extra_pago}", ln=True)
         pdf.set_text_color(80, 80, 80)
         pdf.set_font("Helvetica", "", 8)
         pdf.multi_cell(

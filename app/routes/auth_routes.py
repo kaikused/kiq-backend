@@ -914,6 +914,7 @@ def admin_cotizar_manual():
         trabajo = crear_trabajo_desde_presupuesto(payload, cliente_id=None)
         aplicar_cobro(trabajo, {
             "metodo_pago": data.get("metodo_pago"),
+            "cobrado": bool(data.get("cobrado")),
             "zona": data.get("zona") or payload.get("direccion"),
             "fecha_visita": data.get("fecha_visita"),
         })
