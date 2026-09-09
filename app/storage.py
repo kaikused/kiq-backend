@@ -187,6 +187,7 @@ def upload_bytes_to_gcs(
     blob = bucket.blob(blob_path)
     if content_type == "application/pdf":
         blob.content_disposition = f'inline; filename="{safe_name}"'
+        blob.cache_control = "no-cache, max-age=0"
     blob.upload_from_string(payload, content_type=content_type)
     url = _signed_url(blob, creds)
     print(f"✅ GCS OK gs://{BUCKET_NAME}/{blob_path} ({len(payload)} bytes)")

@@ -381,7 +381,9 @@ def abrir_pdf_corto(code):
         return "Presupuesto no encontrado", 404
     try:
         url = signed_url_for_blob(f"cotizaciones/{code}/presupuesto-kiq.pdf")
-        return redirect(url)
+        resp = redirect(url)
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        return resp
     except Exception as exc:  # pylint: disable=broad-exception-caught
         print(f"❌ No se pudo abrir PDF corto {code}: {exc}")
         return "No se pudo abrir el PDF", 500

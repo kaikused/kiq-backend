@@ -35,6 +35,7 @@ from app.jobs import (
     aplicar_cobro,
     aplicar_estado,
     metodo_cobro_publico,
+    regenerar_pdf_trabajo,
     zona_desde_direccion,
 )
 from app.storage import codigo_desde_carpeta, url_foto_almacenada
@@ -811,6 +812,7 @@ def admin_editar_trabajo(job_id):
     if 'precio' in data and data.get('precio') is not None:
         try:
             trabajo.precio_calculado = float(data.get('precio'))
+            trabajo.precio_estimado = trabajo.precio_calculado
         except (TypeError, ValueError):
             return jsonify({'error': 'Precio no válido'}), 400
     if 'telefono' in data:
@@ -824,9 +826,21 @@ def admin_editar_trabajo(job_id):
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
 
+    pdf_error = None
+    try:
+        regenerar_pdf_trabajo(trabajo)
+    except Exception as err:  # pylint: disable=broad-exception-caught
+        pdf_error = str(err)
+        print(f"Error regenerando PDF trabajo #{job_id}: {err}")
+
     try:
         db.session.commit()
-        return jsonify(_trabajo_admin_json(trabajo)), 200
+        payload = _trabajo_admin_json(trabajo)
+        if pdf_error:
+            payload['pdf_error'] = pdf_error
+        else:
+            payload['pdf_actualizado'] = True
+        return jsonify(payload), 200
     except Exception as e:  # pylint: disable=broad-exception-caught
         db.session.rollback()
         print(f"Error admin editar trabajo: {e}")

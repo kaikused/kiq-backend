@@ -10,9 +10,10 @@ Publicar (solo admin) pasa de cotizacion a pendiente (visible a montadores).
 No uses /api/cliente/publicar-trabajo (modelo de cobro in-app, obsoleto).
 """
 from datetime import datetime
+import json
 
 from app.extensions import db
-from app.models import Trabajo
+from app.models import Cliente, Trabajo
 
 
 def zona_desde_direccion(direccion):
@@ -140,3 +141,57 @@ def aplicar_estado(trabajo: Trabajo, estado):
     trabajo.estado = est
     if est in ("cotizacion", "pendiente"):
         trabajo.montador_id = None
+
+
+def _carpeta_pdf(trabajo, nombre):
+    from app.storage import nueva_carpeta_cotizacion
+    raw = (getattr(trabajo, "pdf_carpeta", None) or "").strip()
+    if not raw:
+        return nueva_carpeta_cotizacion(nombre or "cliente")
+    if raw.startswith("cotizaciones/"):
+        return raw
+    return f"cotizaciones/{raw}"
+
+
+def regenerar_pdf_trabajo(trabajo):
+    """Vuelve a generar el PDF con los datos actuales y lo pisa en GCS."""
+    from app.calculator.pdf import generar_pdf_presupuesto
+    from app.storage import upload_bytes_to_gcs, url_foto_almacenada
+
+    cliente = Cliente.query.get(trabajo.cliente_id)
+    desglose = trabajo.desglose or {}
+    if isinstance(desglose, str):
+        try:
+            desglose = json.loads(desglose)
+        except json.JSONDecodeError:
+            desglose = {}
+
+    nombre = (cliente.nombre if cliente else "") or "Cliente"
+    zona = (getattr(trabajo, "zona", None) or "").strip()
+    direccion = trabajo.direccion or ""
+    if zona and zona.lower() not in direccion.lower():
+        direccion = f"{direccion} ({zona})".strip()
+    payload = {
+        "nombre": nombre,
+        "email": cliente.email if cliente else "",
+        "telefono": cliente.telefono if cliente else "",
+        "direccion": direccion,
+        "descripcion": trabajo.descripcion,
+        "precio_calculado": trabajo.precio_calculado,
+        "desglose": desglose,
+        "imagenes": [
+            url_foto_almacenada(u) or u for u in (trabajo.imagenes_urls or [])
+        ],
+        "consulta_manual": False,
+    }
+    pdf_bytes = generar_pdf_presupuesto(payload)
+    carpeta = _carpeta_pdf(trabajo, nombre)
+    upload_bytes_to_gcs(
+        pdf_bytes,
+        "presupuesto-kiq.pdf",
+        folder=carpeta,
+        content_type="application/pdf",
+        unique_name=False,
+    )
+    trabajo.pdf_carpeta = carpeta
+    return carpeta
