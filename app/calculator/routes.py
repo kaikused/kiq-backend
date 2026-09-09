@@ -317,24 +317,13 @@ def enviar_presupuesto():
     )
     print(f"📧 Lead interno a {leads_email}: {enviado_ok} | pdf_url={pdf_url}")
 
-    if consulta:
-        mensaje_wa = (
-            f"Hola, soy {nombre}. He pedido una consulta de montaje en Kiq (sin precio cerrado).\n"
-            f"Zona: {data.get('direccion') or 'pendiente'}\n"
-            f"Qué montar: {data.get('descripcion') or 'muebles'}\n"
-        )
-    else:
-        mensaje_wa = (
-            f"Hola, soy {nombre}. He pedido un presupuesto de montaje en Kiq.\n"
-            f"Total estimado: {precio}€\n"
-            f"Zona: {data.get('direccion') or 'pendiente'}\n"
-            f"Qué montar: {data.get('descripcion') or 'muebles'}\n"
-        )
+    mensaje_wa = (
+        f"Hola, soy {nombre}. He pedido un presupuesto de montaje en Kiq.\n"
+        f"Zona: {data.get('direccion') or 'pendiente'}\n"
+        f"Qué montar: {data.get('descripcion') or 'muebles'}\n"
+        "Os escribo para que me confirméis el presupuesto por aquí.\n"
+    )
     link_pdf = pdf_corto or pdf_url
-    if link_pdf:
-        mensaje_wa += f"PDF: {link_pdf}\n"
-    else:
-        mensaje_wa += "El PDF te lo enviamos por correo a Kiq.\n"
     whatsapp_url = f"https://wa.me/{whatsapp_kiq}?text={quote(mensaje_wa)}"
 
     trabajo_id = None
