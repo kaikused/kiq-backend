@@ -218,8 +218,8 @@ def upload_image_to_gcs(file, folder="misc", as_path=False):
     """Sube una imagen (FileStorage o bytes). Devuelve URL firmada, ruta, o None."""
     try:
         filename = getattr(file, "filename", None) or "foto.jpg"
-        content_type = getattr(file, "content_type", None) or "image/jpeg"
         payload = _read_bytes(file)
+        payload, content_type, filename = comprimir_imagen(payload, filename)
         url, path = upload_bytes_to_gcs(
             payload,
             filename,

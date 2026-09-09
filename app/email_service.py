@@ -10,17 +10,34 @@ load_dotenv()
 
 resend.api_key = os.getenv('RESEND_API_KEY')
 
-REMITENTES = [
-    os.getenv("RESEND_FROM"),
-    "Kiq Montajes <info@kiq.es>",
-    "Kiq Montajes <beth.t@example.com>",
-]
+# onboarding@resend.dev funciona hacia el email de la cuenta Resend
+# mientras kiq.es no esté verificado en https://resend.com/domains
+_REMITENTE_OK = None
+
+
+def _remitentes():
+    vistos = []
+    for candidato in (
+        (os.getenv("RESEND_FROM") or "").strip(),
+        "Kiq Montajes <info@kiq.es>",
+        "Kiq Montajes <onboarding@resend.dev>",
+    ):
+        if candidato and candidato not in vistos:
+            vistos.append(candidato)
+    return vistos
 
 
 def enviar_email_generico(destinatario, asunto, contenido_html, attachments=None, bcc=None):
-    """Envía correo. Si el dominio info@kiq.es no está verificado, prueba Resend onboarding."""
+    """Envía correo. Prueba kiq.es y, si el dominio no está verificado, Resend de prueba."""
+    global _REMITENTE_OK
     last_error = None
-    for remitente in REMITENTES:
+    orden = [_REMITENTE_OK] if _REMITENTE_OK else _remitentes()
+    if _REMITENTE_OK:
+        for extra in _remitentes():
+            if extra not in orden:
+                orden.append(extra)
+
+    for remitente in orden:
         if not remitente:
             continue
         try:
@@ -36,10 +53,13 @@ def enviar_email_generico(destinatario, asunto, contenido_html, attachments=None
                 params["attachments"] = attachments
 
             email = resend.Emails.send(params)
+            _REMITENTE_OK = remitente
             print(f"📧 Email enviado a {destinatario} via {remitente}: ID {email.get('id')}")
             return True
         except Exception as error:  # pylint: disable=broad-exception-caught
             last_error = error
+            if _REMITENTE_OK == remitente:
+                _REMITENTE_OK = None
             print(f"❌ Error enviando email ({remitente}): {error}")
 
     print(f"❌ No se pudo enviar email a {destinatario}: {last_error}")

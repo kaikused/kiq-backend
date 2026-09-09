@@ -1,16 +1,18 @@
 """
-Cotización logueada → inbox admin → tablero.
+Cotización → inbox admin.
 
-El visitante (sin cuenta) no pasa por aquí: solo PDF + WhatsApp.
+Visitante (sin cuenta): ficha de lead, PDF, WhatsApp. No sale al tablero.
+Cliente con cuenta: igual, y el admin puede publicar al tablero de montadores.
 
-    from app.jobs import payload_desde_presupuesto, crear_trabajo_inbox
-    trabajo = crear_trabajo_inbox(cliente_id, payload_desde_presupuesto(data))
+    from app.jobs import crear_trabajo_desde_presupuesto
+    trabajo = crear_trabajo_desde_presupuesto(data, cliente_id=...)
 
-Publicar (solo admin) pasa de cotizacion a pendiente (visible a montadores).
 No uses /api/cliente/publicar-trabajo (modelo de cobro in-app, obsoleto).
 """
 from datetime import datetime
 import json
+import secrets
+import uuid
 
 from app.extensions import db
 from app.models import Cliente, Trabajo
@@ -51,6 +53,65 @@ def payload_desde_presupuesto(data: dict) -> dict:
     }
 
 
+def _etiquetas_inbox(raw, origen_invitado=False):
+    if isinstance(raw, dict):
+        tags = dict(raw)
+    elif isinstance(raw, list):
+        tags = {"vision": raw}
+    else:
+        tags = {}
+    if origen_invitado:
+        tags["origen"] = "invitado"
+    return tags
+
+
+def ficha_es_invitado(trabajo: Trabajo) -> bool:
+    tags = trabajo.etiquetas
+    if isinstance(tags, dict) and tags.get("origen") == "invitado":
+        return True
+    cliente = Cliente.query.get(trabajo.cliente_id)
+    return bool(cliente and getattr(cliente, "es_invitado", False))
+
+
+def asegurar_cliente_para_presupuesto(data: dict):
+    """Cliente con cuenta (si el email existe) o lead invitado (sin login)."""
+    email = (data.get("email") or "").strip().lower()
+    nombre = (data.get("nombre") or "Visitante").strip() or "Visitante"
+    telefono = (data.get("telefono") or "").strip()[:20]
+    if email:
+        existente = Cliente.query.filter_by(email=email).first()
+        if existente:
+            if telefono and not existente.telefono:
+                existente.telefono = telefono
+            if nombre and existente.nombre in ("Cliente", "Visitante", "cliente"):
+                existente.nombre = nombre[:100]
+            return existente, bool(getattr(existente, "es_invitado", False))
+
+    cliente = Cliente(
+        nombre=nombre[:100],
+        email=email or f"invitado.{uuid.uuid4().hex}@leads.kiq.local",
+        telefono=telefono or None,
+        es_invitado=True,
+    )
+    cliente.set_password(secrets.token_urlsafe(24))
+    db.session.add(cliente)
+    db.session.flush()
+    return cliente, True
+
+
+def crear_trabajo_desde_presupuesto(data: dict, cliente_id=None) -> Trabajo:
+    """Inbox para cuenta o visitante. El visitante no se publica al tablero."""
+    payload = payload_desde_presupuesto(data)
+    invitado = False
+    if cliente_id:
+        cid = int(cliente_id)
+    else:
+        cliente, invitado = asegurar_cliente_para_presupuesto(data)
+        cid = cliente.id
+    payload["etiquetas"] = _etiquetas_inbox(payload.get("etiquetas"), origen_invitado=invitado)
+    return crear_trabajo_inbox(cid, payload)
+
+
 def crear_trabajo_inbox(cliente_id: int, payload: dict) -> Trabajo:
     """Borrador solo para el admin. No sale al tablero hasta publicar."""
     descripcion = (payload.get("descripcion") or "").strip() or "Montaje"
@@ -83,6 +144,10 @@ def crear_trabajo_pendiente(cliente_id: int, payload: dict) -> Trabajo:
 
 def publicar_trabajo(trabajo: Trabajo) -> Trabajo:
     """Pasa el borrador al tablero (pendiente, sin montador)."""
+    if ficha_es_invitado(trabajo):
+        raise ValueError(
+            "Visitante: no se publica al tablero. Afina el PDF y cierra por WhatsApp."
+        )
     if trabajo.estado != "cotizacion":
         raise ValueError("Solo se puede publicar una cotización en revisión")
     direccion = (trabajo.direccion or "").strip()

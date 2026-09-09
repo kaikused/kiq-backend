@@ -97,6 +97,7 @@ class Cliente(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     telefono = db.Column(db.String(20))
+    es_invitado = db.Column(db.Boolean, nullable=False, default=False)
     fecha_registro = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     foto_url = db.Column(db.String(500), nullable=True)
     direccion = db.Column(db.String(200), nullable=True)

@@ -34,6 +34,7 @@ from app.jobs import publicar_trabajo as publicar_trabajo_tablero
 from app.jobs import (
     aplicar_cobro,
     aplicar_estado,
+    ficha_es_invitado,
     metodo_cobro_publico,
     regenerar_pdf_trabajo,
     zona_desde_direccion,
@@ -150,6 +151,8 @@ def login_universal():
 
     # 1. Intentar CLIENTE
     cliente = Cliente.query.filter_by(email=email).first()
+    if cliente and getattr(cliente, "es_invitado", False):
+        return jsonify({'message': 'Esta cotización es de visitante. No hay cuenta.'}), 401
     if cliente and check_password_hash(cliente.password_hash, password):
         token = create_access_token(
             identity=str(cliente.id),
@@ -763,11 +766,15 @@ def _trabajo_admin_json(t):
     if getattr(t, 'precio_estimado', None):
         precio_final = t.precio_estimado
 
+    email_cliente = cliente.email if cliente else ""
+    if email_cliente.endswith("@leads.kiq.local"):
+        email_cliente = ""
+
     return {
         "id": t.id,
         "fecha": t.fecha_creacion.strftime('%Y-%m-%d %H:%M'),
         "cliente": cliente.nombre if cliente else "Desconocido",
-        "email_cliente": cliente.email if cliente else "",
+        "email_cliente": email_cliente,
         "telefono_cliente": cliente.telefono if cliente else "",
         "descripcion": t.descripcion,
         "direccion": t.direccion,
@@ -781,6 +788,7 @@ def _trabajo_admin_json(t):
         "fecha_visita": t.fecha_visita.isoformat() if getattr(t, "fecha_visita", None) else None,
         "foto_finalizacion": url_foto_almacenada(getattr(t, "foto_finalizacion", None)),
         "pdf_code": codigo_desde_carpeta(getattr(t, "pdf_carpeta", None) or "") or None,
+        "registrado": not ficha_es_invitado(t),
     }
 
 
@@ -805,6 +813,20 @@ def admin_editar_trabajo(job_id):
         return jsonify({'error': 'Trabajo no encontrado'}), 404
 
     data = request.json or {}
+    cliente = Cliente.query.get(trabajo.cliente_id)
+    if 'nombre' in data and data.get('nombre') is not None and cliente:
+        nombre = (data.get('nombre') or '').strip()[:100]
+        if nombre:
+            cliente.nombre = nombre
+    if 'email' in data and data.get('email') is not None and cliente:
+        email = (data.get('email') or '').strip().lower()
+        if email:
+            otro = Cliente.query.filter(
+                Cliente.email == email, Cliente.id != cliente.id
+            ).first()
+            if otro:
+                return jsonify({'error': 'Ese email ya está en otra ficha'}), 400
+            cliente.email = email[:120]
     if 'descripcion' in data and data.get('descripcion') is not None:
         trabajo.descripcion = (data.get('descripcion') or '').strip()
     if 'direccion' in data and data.get('direccion') is not None:
@@ -894,9 +916,11 @@ def admin_get_usuarios():
             "fecha": m.fecha_registro.strftime('%Y-%m-%d') if m.fecha_registro else "N/A"
         })
 
-    # 2. Obtener Clientes
+    # 2. Clientes con cuenta (los visitantes viven en cotizaciones, no aquí)
     clientes = Cliente.query.all()
     for c in clientes:
+        if getattr(c, "es_invitado", False):
+            continue
         lista_usuarios.append({
             "id": c.id,
             "tipo": "cliente",

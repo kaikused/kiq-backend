@@ -11,11 +11,12 @@ from .tarifario import TARIFARIO
 from .vision import detect_from_vision_labels
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+_GEMINI_ACTIVO = bool(GEMINI_API_KEY)
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
     except Exception:  # pylint: disable=broad-exception-caught
-        GEMINI_API_KEY = None
+        _GEMINI_ACTIVO = False
 
 
 def _base_item(tipo: str, fuente: str, confianza: float = 0.7) -> dict:
@@ -86,7 +87,8 @@ def find_furniture_keywords(texto: str) -> list[str]:
 
 def analizar_con_gemini_estricto(texto_usuario: str) -> list[dict] | None:
     """Usa Gemini para extraer muebles. Es estricto: si falta info, la pide."""
-    if not GEMINI_API_KEY or not texto_usuario.strip():
+    global _GEMINI_ACTIVO
+    if not _GEMINI_ACTIVO or not texto_usuario.strip():
         return None
 
     try:
@@ -140,7 +142,16 @@ Responde SOLO con JSON.
         return datos
 
     except Exception as e:  # pylint: disable=broad-exception-caught
-        print(f"⚠️ Error Gemini Estricto: {e}")
+        msg = str(e)
+        if "API_KEY_INVALID" in msg or "API key not valid" in msg:
+            _GEMINI_ACTIVO = False
+            print(
+                "⚠️ Gemini desactivado: GEMINI_API_KEY inválida. "
+                "Cotizador sigue con Vision y tarifario. "
+                "Pon una clave de https://aistudio.google.com/apikey en Render."
+            )
+        else:
+            print(f"⚠️ Error Gemini Estricto: {e}")
         return None
 
 

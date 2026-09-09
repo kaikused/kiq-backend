@@ -342,14 +342,14 @@ def enviar_presupuesto():
         verify_jwt_in_request(optional=True)
         identity = get_jwt_identity()
         claims = get_jwt() if identity else {}
-        if identity and claims.get("rol") == "cliente":
-            from app.jobs import crear_trabajo_inbox, payload_desde_presupuesto
-            trabajo = crear_trabajo_inbox(
-                int(identity),
-                payload_desde_presupuesto(data),
-            )
-            trabajo_id = trabajo.id
-            print(f"Inbox admin trabajo #{trabajo_id} (cliente {identity})")
+        cliente_id = int(identity) if identity and claims.get("rol") == "cliente" else None
+        from app.jobs import crear_trabajo_desde_presupuesto
+        trabajo = crear_trabajo_desde_presupuesto(data, cliente_id=cliente_id)
+        trabajo_id = trabajo.id
+        print(
+            f"Inbox admin trabajo #{trabajo_id} "
+            f"({'cliente ' + str(identity) if cliente_id else 'visitante'})"
+        )
     except Exception as err:  # pylint: disable=broad-exception-caught
         print(f"No se creó ficha de inbox: {err}")
 
