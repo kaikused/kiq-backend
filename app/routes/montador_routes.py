@@ -41,15 +41,9 @@ def get_trabajos_disponibles():
         zona_m = (montador.zona_servicio or "").strip().lower() if montador else ""
         trabajos = Trabajo.query.filter_by(
             estado='pendiente', montador_id=None
-        ).all()
+        ).order_by(Trabajo.fecha_creacion.desc()).all()
         res = []
         for t in trabajos:
-            zona_job = (
-                (getattr(t, "zona", None) or zona_desde_direccion(t.direccion) or "")
-            ).lower()
-            if zona_m and zona_job and zona_m not in zona_job and zona_job not in zona_m:
-                continue
-
             cliente = Cliente.query.get(t.cliente_id)
 
             desglose_data = t.desglose
@@ -60,6 +54,10 @@ def get_trabajos_disponibles():
                     desglose_data = None
 
             zona_ref = getattr(t, "zona", None) or zona_desde_direccion(t.direccion) or "Málaga"
+            zona_job = (zona_ref or "").lower()
+            coincide = bool(
+                zona_m and zona_job and (zona_m in zona_job or zona_job in zona_m)
+            )
             direccion_oculta = f"Zona: {zona_ref}"
 
             res.append({
@@ -71,6 +69,7 @@ def get_trabajos_disponibles():
                 "fecha_creacion": t.fecha_creacion.isoformat(),
                 "fecha_visita": t.fecha_visita.isoformat() if getattr(t, "fecha_visita", None) else None,
                 "zona": zona_ref,
+                "coincide_zona": coincide,
                 "imagenes_urls": t.imagenes_urls,
                 "etiquetas": t.etiquetas,
                 "cliente_nombre": cliente.nombre if cliente else "Usuario Kiq",
@@ -79,6 +78,7 @@ def get_trabajos_disponibles():
                 "cobrado": bool(getattr(t, "cobrado", False)),
                 "desglose": desglose_data
             })
+        res.sort(key=lambda item: (not item.get("coincide_zona"),))
         return jsonify(res), 200
     except Exception as e: # pylint: disable=broad-exception-caught
         print(f"Error en get_trabajos_disponibles: {e}")
