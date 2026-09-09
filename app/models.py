@@ -192,6 +192,8 @@ class Trabajo(db.Model):
     desglose = db.Column(db.JSON, nullable=True)
     foto_finalizacion = db.Column(db.Text, nullable=True)
     cobrado = db.Column(db.Boolean, nullable=False, default=False)
+    zona = db.Column(db.String(120), nullable=True)
+    fecha_visita = db.Column(db.DateTime, nullable=True)
 
     # Campo legacy
     precio_estimado = db.Column(db.Float, nullable=True)

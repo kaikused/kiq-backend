@@ -12,7 +12,7 @@ from app.models import Cliente, Trabajo, Montador, Product
 from app.extensions import db
 from app.email_service import enviar_resumen_presupuesto
 from app.storage import url_foto_almacenada
-from app.jobs import metodo_cobro_publico
+from app.jobs import metodo_cobro_publico, zona_desde_direccion
 
 cliente_bp = Blueprint('cliente', __name__)
 
@@ -93,7 +93,7 @@ def publicar_trabajo_logueado():
 @cliente_bp.route('/cliente/mis-trabajos', methods=['GET'])
 @jwt_required()
 def get_mis_trabajos():
-    """Trabajos publicados del cliente. Las fichas en inbox (cotizacion) no salen."""
+    """Trabajos del cliente, incluida la revisión de Kiq (cotizacion)."""
     claims = get_jwt()
     if claims.get('rol') != 'cliente':
         return jsonify({"error": "Acceso no autorizado"}), 403
@@ -103,7 +103,6 @@ def get_mis_trabajos():
 
         trabajos = Trabajo.query.filter(
             Trabajo.cliente_id == user_id,
-            Trabajo.estado != "cotizacion",
         ).order_by(Trabajo.fecha_creacion.desc()).all()
 
         res = []
@@ -140,6 +139,8 @@ def get_mis_trabajos():
                 "desglose": desglose,
                 "metodo_pago": metodo_cobro_publico(t.metodo_pago) or "efectivo",
                 "cobrado": bool(getattr(t, "cobrado", False)),
+                "zona": getattr(t, "zona", None) or zona_desde_direccion(t.direccion),
+                "fecha_visita": t.fecha_visita.isoformat() if getattr(t, "fecha_visita", None) else None,
                 "payment_intent_id": t.payment_intent_id,
                 "etiquetas": t.etiquetas
             })

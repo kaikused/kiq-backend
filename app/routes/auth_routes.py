@@ -31,7 +31,7 @@ from app import db
 # Importamos tus modelos REALES (Agregado Wallet aquí para evitar C0415)
 from app.models import Cliente, Montador, Trabajo, Code, Wallet
 from app.jobs import publicar_trabajo as publicar_trabajo_tablero
-from app.jobs import aplicar_cobro, metodo_cobro_publico
+from app.jobs import aplicar_cobro, metodo_cobro_publico, zona_desde_direccion
 # IMPORTAMOS LOS SERVICIOS ROBUSTOS
 from app.email_service import enviar_codigo_verificacion, enviar_email_generico
 from app.gems_service import asignar_bono_bienvenida
@@ -770,6 +770,8 @@ def _trabajo_admin_json(t):
         "imagenes_urls": t.imagenes_urls or [],
         "metodo_pago": metodo_cobro_publico(t.metodo_pago) or "efectivo",
         "cobrado": bool(getattr(t, "cobrado", False)),
+        "zona": getattr(t, "zona", None) or zona_desde_direccion(t.direccion),
+        "fecha_visita": t.fecha_visita.isoformat() if getattr(t, "fecha_visita", None) else None,
     }
 
 

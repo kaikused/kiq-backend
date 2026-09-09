@@ -9,8 +9,32 @@ El visitante (sin cuenta) no pasa por aquí: solo PDF + WhatsApp.
 Publicar (solo admin) pasa de cotizacion a pendiente (visible a montadores).
 No uses /api/cliente/publicar-trabajo (modelo de cobro in-app, obsoleto).
 """
+from datetime import datetime
+
 from app.extensions import db
 from app.models import Trabajo
+
+
+def zona_desde_direccion(direccion):
+    """Primera parte de la dirección, para filtrar montadores."""
+    d = (direccion or "").strip()
+    if not d:
+        return None
+    return d.split(",")[0].strip()[:120] or None
+
+
+def parse_fecha_visita(valor):
+    if not valor:
+        return None
+    texto = str(valor).strip()
+    if not texto:
+        return None
+    try:
+        if texto.endswith("Z"):
+            texto = texto[:-1]
+        return datetime.fromisoformat(texto)
+    except ValueError:
+        return None
 
 
 def payload_desde_presupuesto(data: dict) -> dict:
@@ -41,6 +65,7 @@ def crear_trabajo_inbox(cliente_id: int, payload: dict) -> Trabajo:
         desglose=payload.get("desglose"),
         metodo_pago="efectivo",
         cobrado=False,
+        zona=zona_desde_direccion(direccion),
     )
     db.session.add(trabajo)
     db.session.commit()
@@ -88,3 +113,7 @@ def aplicar_cobro(trabajo: Trabajo, data: dict) -> None:
             trabajo.metodo_pago = metodo
     if "cobrado" in data:
         trabajo.cobrado = bool(data.get("cobrado"))
+    if "zona" in data and data.get("zona") is not None:
+        trabajo.zona = (data.get("zona") or "").strip()[:120] or None
+    if "fecha_visita" in data:
+        trabajo.fecha_visita = parse_fecha_visita(data.get("fecha_visita"))

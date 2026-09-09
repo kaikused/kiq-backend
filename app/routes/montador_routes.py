@@ -12,7 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.models import Cliente, Trabajo, Montador
 from app.extensions import db
 from app.storage import upload_image_to_gcs, url_foto_almacenada
-from app.jobs import aplicar_cobro, metodo_cobro_publico
+from app.jobs import aplicar_cobro, metodo_cobro_publico, zona_desde_direccion
 
 montador_bp = Blueprint('montador', __name__)
 
@@ -37,11 +37,19 @@ def get_trabajos_disponibles():
         return jsonify({"error": "Acceso no autorizado"}), 403
 
     try:
+        montador = Montador.query.get(int(get_jwt_identity()))
+        zona_m = (montador.zona_servicio or "").strip().lower() if montador else ""
         trabajos = Trabajo.query.filter_by(
             estado='pendiente', montador_id=None
         ).all()
         res = []
         for t in trabajos:
+            zona_job = (
+                (getattr(t, "zona", None) or zona_desde_direccion(t.direccion) or "")
+            ).lower()
+            if zona_m and zona_job and zona_m not in zona_job and zona_job not in zona_m:
+                continue
+
             cliente = Cliente.query.get(t.cliente_id)
 
             desglose_data = t.desglose
@@ -51,8 +59,8 @@ def get_trabajos_disponibles():
                 except json.JSONDecodeError:
                     desglose_data = None
 
-            zona_ref = t.direccion.split(',')[0] if t.direccion else "Málaga"
-            direccion_oculta = f"📍 Zona de {zona_ref}"
+            zona_ref = getattr(t, "zona", None) or zona_desde_direccion(t.direccion) or "Málaga"
+            direccion_oculta = f"Zona: {zona_ref}"
 
             res.append({
                 "trabajo_id": t.id,
@@ -61,6 +69,8 @@ def get_trabajos_disponibles():
                 "direccion_completa": None,
                 "precio_calculado": t.precio_calculado,
                 "fecha_creacion": t.fecha_creacion.isoformat(),
+                "fecha_visita": t.fecha_visita.isoformat() if getattr(t, "fecha_visita", None) else None,
+                "zona": zona_ref,
                 "imagenes_urls": t.imagenes_urls,
                 "etiquetas": t.etiquetas,
                 "cliente_nombre": cliente.nombre if cliente else "Usuario Kiq",
@@ -119,6 +129,8 @@ def get_mis_trabajos_montador():
                 "desglose": desglose_data,
                 "metodo_pago": metodo_cobro_publico(t.metodo_pago) or "efectivo",
                 "cobrado": bool(getattr(t, "cobrado", False)),
+                "zona": getattr(t, "zona", None) or zona_desde_direccion(t.direccion),
+                "fecha_visita": t.fecha_visita.isoformat() if getattr(t, "fecha_visita", None) else None,
             })
         return jsonify(res), 200
     except Exception as e: # pylint: disable=broad-exception-caught
