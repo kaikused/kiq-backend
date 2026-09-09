@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.models import Cliente, Trabajo, Montador
 from app.extensions import db
-from app.storage import upload_image_to_gcs
+from app.storage import upload_image_to_gcs, url_foto_almacenada
 from app.gems_service import recargar_gemas
 
 montador_bp = Blueprint('montador', __name__)
@@ -222,11 +222,11 @@ def finalizar_con_evidencia(trabajo_id):
         if trabajo.estado != 'aceptado':
             return jsonify({"error": "Estado incorrecto"}), 400
 
-        url_publica = upload_image_to_gcs(file, folder="evidencias")
-        if not url_publica:
+        blob_path = upload_image_to_gcs(file, folder="evidencias", as_path=True)
+        if not blob_path:
             return jsonify({"error": "Error al subir a GCS."}), 500
 
-        trabajo.foto_finalizacion = url_publica
+        trabajo.foto_finalizacion = blob_path
         trabajo.estado = 'revision_cliente'
         db.session.commit()
 
@@ -234,7 +234,7 @@ def finalizar_con_evidencia(trabajo_id):
             "success": True,
             "message": "Evidencia subida.",
             "estado": "revision_cliente",
-            "foto": url_publica
+            "foto": url_foto_almacenada(blob_path)
         }), 200
 
     except Exception as e: # pylint: disable=broad-exception-caught

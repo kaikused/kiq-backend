@@ -96,6 +96,14 @@ def create_app():
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
 
+                try:
+                    conn.execute(text(
+                        "ALTER TABLE trabajo ALTER COLUMN foto_finalizacion TYPE TEXT"
+                    ))
+                    conn.commit()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
+
                 print("✅ DB Patch: Todas las columnas verificadas.")
 
         except Exception as e:  # pylint: disable=broad-exception-caught

@@ -190,7 +190,7 @@ class Trabajo(db.Model):
     imagenes_urls = db.Column(db.JSON, nullable=True)
     etiquetas = db.Column(db.JSON, nullable=True)
     desglose = db.Column(db.JSON, nullable=True)
-    foto_finalizacion = db.Column(db.String(512), nullable=True)
+    foto_finalizacion = db.Column(db.Text, nullable=True)
     
     # Campo legacy
     precio_estimado = db.Column(db.Float, nullable=True)

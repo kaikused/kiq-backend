@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.models import Cliente, Trabajo, Montador, Product
 from app.extensions import db
 from app.email_service import enviar_resumen_presupuesto
+from app.storage import url_foto_almacenada
 
 cliente_bp = Blueprint('cliente', __name__)
 
@@ -134,7 +135,7 @@ def get_mis_trabajos():
                 "fecha_creacion": t.fecha_creacion.isoformat(),
                 "montador_info": montador_info,
                 "imagenes_urls": t.imagenes_urls,
-                "foto_finalizacion": t.foto_finalizacion,
+                "foto_finalizacion": url_foto_almacenada(t.foto_finalizacion),
                 "desglose": desglose,
                 "metodo_pago": t.metodo_pago,
                 "payment_intent_id": t.payment_intent_id,

@@ -200,19 +200,32 @@ def signed_url_for_blob(blob_path: str) -> str:
     return _signed_url(blob, creds)
 
 
-def upload_image_to_gcs(file, folder="misc"):
-    """Sube una imagen (FileStorage o bytes). Devuelve URL o None."""
+def url_foto_almacenada(valor):
+    """Ruta corta en DB → URL firmada. Si ya es http, se deja."""
+    if not valor:
+        return None
+    if str(valor).startswith("http://") or str(valor).startswith("https://"):
+        return valor
+    try:
+        return signed_url_for_blob(valor)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        print(f"⚠️ No se pudo firmar foto {valor}: {exc}")
+        return None
+
+
+def upload_image_to_gcs(file, folder="misc", as_path=False):
+    """Sube una imagen (FileStorage o bytes). Devuelve URL firmada, ruta, o None."""
     try:
         filename = getattr(file, "filename", None) or "foto.jpg"
         content_type = getattr(file, "content_type", None) or "image/jpeg"
         payload = _read_bytes(file)
-        url, _path = upload_bytes_to_gcs(
+        url, path = upload_bytes_to_gcs(
             payload,
             filename,
             folder=folder,
             content_type=content_type,
         )
-        return url
+        return path if as_path else url
     except Exception as exc:  # pylint: disable=broad-exception-caught
         print(f"❌ Error subiendo imagen a GCS ({BUCKET_NAME}): {exc}")
         return None
