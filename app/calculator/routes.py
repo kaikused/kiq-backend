@@ -3,6 +3,7 @@ import os
 from urllib.parse import quote
 
 from flask import Blueprint, jsonify, redirect, request
+from flask_jwt_extended import get_jwt, get_jwt_identity, verify_jwt_in_request
 from google.cloud import vision
 
 from ..email_service import enviar_lead_interno
@@ -336,6 +337,22 @@ def enviar_presupuesto():
         mensaje_wa += "El PDF te lo enviamos por correo a Kiq.\n"
     whatsapp_url = f"https://wa.me/{whatsapp_kiq}?text={quote(mensaje_wa)}"
 
+    trabajo_id = None
+    try:
+        verify_jwt_in_request(optional=True)
+        identity = get_jwt_identity()
+        claims = get_jwt() if identity else {}
+        if identity and claims.get("rol") == "cliente":
+            from app.jobs import crear_trabajo_inbox, payload_desde_presupuesto
+            trabajo = crear_trabajo_inbox(
+                int(identity),
+                payload_desde_presupuesto(data),
+            )
+            trabajo_id = trabajo.id
+            print(f"Inbox admin trabajo #{trabajo_id} (cliente {identity})")
+    except Exception as err:  # pylint: disable=broad-exception-caught
+        print(f"No se creó ficha de inbox: {err}")
+
     return jsonify({
         "status": "success",
         "enviado_interno": enviado_ok,
@@ -343,6 +360,7 @@ def enviar_presupuesto():
         "pdf_url_firmada": pdf_url,
         "gcs_error": gcs_error,
         "whatsapp_url": whatsapp_url,
+        "trabajo_id": trabajo_id,
     })
 
 

@@ -30,6 +30,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from app import db
 # Importamos tus modelos REALES (Agregado Wallet aquí para evitar C0415)
 from app.models import Cliente, Montador, Trabajo, Code, Wallet
+from app.jobs import publicar_trabajo as publicar_trabajo_tablero
 # IMPORTAMOS LOS SERVICIOS ROBUSTOS
 from app.email_service import enviar_codigo_verificacion, enviar_email_generico
 from app.gems_service import asignar_bono_bienvenida
@@ -741,41 +742,97 @@ def admin_reset_password():
         'email': user.email,
     }), 200
 
+def _trabajo_admin_json(t):
+    """Serializa un trabajo para el panel admin."""
+    cliente = Cliente.query.get(t.cliente_id)
+    montador_nombre = "Sin asignar"
+    if t.montador_id:
+        m = Montador.query.get(t.montador_id)
+        if m:
+            montador_nombre = m.nombre
+
+    precio_final = getattr(t, 'precio_calculado', 0)
+    if getattr(t, 'precio_estimado', None):
+        precio_final = t.precio_estimado
+
+    return {
+        "id": t.id,
+        "fecha": t.fecha_creacion.strftime('%Y-%m-%d %H:%M'),
+        "cliente": cliente.nombre if cliente else "Desconocido",
+        "email_cliente": cliente.email if cliente else "",
+        "telefono_cliente": cliente.telefono if cliente else "",
+        "descripcion": t.descripcion,
+        "direccion": t.direccion,
+        "precio": precio_final,
+        "montador": montador_nombre,
+        "estado": t.estado,
+        "imagenes_urls": t.imagenes_urls or [],
+    }
+
+
 @auth_bp.route('/admin/todos-los-trabajos', methods=['GET'])
 def admin_get_todos_los_trabajos():
     """Panel Admin Seguro."""
-    # Validación Estándar Bearer Token
     if not _validar_admin_token():
         return jsonify({'error': 'Acceso denegado. Token inválido.'}), 401
 
     trabajos = Trabajo.query.order_by(Trabajo.fecha_creacion.desc()).all()
-    lista_final = []
+    return jsonify([_trabajo_admin_json(t) for t in trabajos]), 200
 
-    for t in trabajos:
-        cliente = Cliente.query.get(t.cliente_id)
-        montador_nombre = "Sin asignar"
-        if t.montador_id:
-            m = Montador.query.get(t.montador_id)
-            if m:
-                montador_nombre = m.nombre
 
-        precio_final = getattr(t, 'precio_calculado', 0)
-        if hasattr(t, 'precio_estimado') and t.precio_estimado:
-            precio_final = t.precio_estimado
+@auth_bp.route('/admin/trabajo/<int:job_id>', methods=['PATCH'])
+def admin_editar_trabajo(job_id):
+    """Edita precio, dirección, descripción o teléfono del cliente."""
+    if not _validar_admin_token():
+        return jsonify({'error': 'Acceso denegado. Token inválido.'}), 401
 
-        lista_final.append({
-            "id": t.id,
-            "fecha": t.fecha_creacion.strftime('%Y-%m-%d %H:%M'),
-            "cliente": cliente.nombre if cliente else "Desconocido",
-            "email_cliente": cliente.email if cliente else "",
-            "telefono_cliente": cliente.telefono if cliente else "",
-            "descripcion": t.descripcion,
-            "precio": precio_final,
-            "montador": montador_nombre,
-            "estado": t.estado
-        })
+    trabajo = Trabajo.query.get(job_id)
+    if not trabajo:
+        return jsonify({'error': 'Trabajo no encontrado'}), 404
 
-    return jsonify(lista_final), 200
+    data = request.json or {}
+    if 'descripcion' in data and data.get('descripcion') is not None:
+        trabajo.descripcion = (data.get('descripcion') or '').strip()
+    if 'direccion' in data and data.get('direccion') is not None:
+        trabajo.direccion = (data.get('direccion') or '').strip()[:200]
+    if 'precio' in data and data.get('precio') is not None:
+        try:
+            trabajo.precio_calculado = float(data.get('precio'))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Precio no válido'}), 400
+    if 'telefono' in data:
+        cliente = Cliente.query.get(trabajo.cliente_id)
+        if cliente:
+            cliente.telefono = (data.get('telefono') or '').strip() or cliente.telefono
+
+    try:
+        db.session.commit()
+        return jsonify(_trabajo_admin_json(trabajo)), 200
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        db.session.rollback()
+        print(f"Error admin editar trabajo: {e}")
+        return jsonify({'error': 'No se pudo guardar'}), 500
+
+
+@auth_bp.route('/admin/trabajo/<int:job_id>/publicar', methods=['POST'])
+def admin_publicar_trabajo(job_id):
+    """Último filtro: sale al tablero (cliente y montadores)."""
+    if not _validar_admin_token():
+        return jsonify({'error': 'Acceso denegado. Token inválido.'}), 401
+
+    trabajo = Trabajo.query.get(job_id)
+    if not trabajo:
+        return jsonify({'error': 'Trabajo no encontrado'}), 404
+
+    try:
+        publicar_trabajo_tablero(trabajo)
+        return jsonify(_trabajo_admin_json(trabajo)), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        db.session.rollback()
+        print(f"Error admin publicar: {e}")
+        return jsonify({'error': 'No se pudo publicar'}), 500
 
 @auth_bp.route('/admin/usuarios', methods=['GET'])
 def admin_get_usuarios():

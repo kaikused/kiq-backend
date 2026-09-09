@@ -1,14 +1,13 @@
 """
-Puente cotización → trabajo de tablero.
+Cotización logueada → inbox admin → tablero.
 
-El funnel vivo (PDF + WhatsApp) no llama a esto todavía.
-Cuando toque el marketplace, el único cable es:
+El visitante (sin cuenta) no pasa por aquí: solo PDF + WhatsApp.
 
-    from app.jobs import payload_desde_presupuesto, crear_trabajo_pendiente
-    trabajo = crear_trabajo_pendiente(cliente_id, payload_desde_presupuesto(data))
+    from app.jobs import payload_desde_presupuesto, crear_trabajo_inbox
+    trabajo = crear_trabajo_inbox(cliente_id, payload_desde_presupuesto(data))
 
-No uses /api/cliente/publicar-trabajo (deja el job en 'cotizacion' para cobrar
-en la app). Ese modelo está obsoleto.
+Publicar (solo admin) pasa de cotizacion a pendiente (visible a montadores).
+No uses /api/cliente/publicar-trabajo (modelo de cobro in-app, obsoleto).
 """
 from app.extensions import db
 from app.models import Trabajo
@@ -26,24 +25,45 @@ def payload_desde_presupuesto(data: dict) -> dict:
     }
 
 
-def crear_trabajo_pendiente(cliente_id: int, payload: dict) -> Trabajo:
-    """Crea un trabajo que el montador ve en Disponibles. Sin cobro in-app."""
-    descripcion = payload.get("descripcion") or ""
-    direccion = payload.get("direccion") or ""
-    if not descripcion or not direccion:
-        raise ValueError("Faltan descripcion o direccion")
+def crear_trabajo_inbox(cliente_id: int, payload: dict) -> Trabajo:
+    """Borrador solo para el admin. No sale al tablero hasta publicar."""
+    descripcion = (payload.get("descripcion") or "").strip() or "Montaje"
+    direccion = (payload.get("direccion") or "a confirmar").strip()[:200]
 
     trabajo = Trabajo(
         descripcion=descripcion,
         direccion=direccion,
         precio_calculado=float(payload.get("precio_calculado") or 0),
         cliente_id=int(cliente_id),
-        estado="pendiente",
+        estado="cotizacion",
         imagenes_urls=payload.get("imagenes_urls") or [],
         etiquetas=payload.get("etiquetas") or {},
         desglose=payload.get("desglose"),
         metodo_pago="efectivo_gemas",
     )
     db.session.add(trabajo)
+    db.session.commit()
+    return trabajo
+
+
+def crear_trabajo_pendiente(cliente_id: int, payload: dict) -> Trabajo:
+    """Crea un trabajo ya publicado. Preferible pasar por inbox + publicar."""
+    trabajo = crear_trabajo_inbox(cliente_id, payload)
+    return publicar_trabajo(trabajo)
+
+
+def publicar_trabajo(trabajo: Trabajo) -> Trabajo:
+    """Pasa el borrador al tablero (pendiente, sin montador)."""
+    if trabajo.estado != "cotizacion":
+        raise ValueError("Solo se puede publicar una cotización en revisión")
+    direccion = (trabajo.direccion or "").strip()
+    if not direccion or direccion.lower() == "a confirmar":
+        raise ValueError("Falta la dirección")
+    if not (trabajo.descripcion or "").strip():
+        raise ValueError("Falta la descripción")
+    if float(trabajo.precio_calculado or 0) <= 0:
+        raise ValueError("El precio tiene que ser mayor que 0")
+    trabajo.estado = "pendiente"
+    trabajo.montador_id = None
     db.session.commit()
     return trabajo

@@ -91,7 +91,7 @@ def publicar_trabajo_logueado():
 @cliente_bp.route('/cliente/mis-trabajos', methods=['GET'])
 @jwt_required()
 def get_mis_trabajos():
-    """Obtiene los trabajos del cliente (incluyendo cotizaciones)."""
+    """Trabajos publicados del cliente. Las fichas en inbox (cotizacion) no salen."""
     claims = get_jwt()
     if claims.get('rol') != 'cliente':
         return jsonify({"error": "Acceso no autorizado"}), 403
@@ -99,10 +99,10 @@ def get_mis_trabajos():
     try:
         user_id = int(get_jwt_identity())
 
-        # Obtenemos TODO ordenado por fecha
-        trabajos = Trabajo.query.filter_by(cliente_id=user_id).order_by(
-            Trabajo.fecha_creacion.desc()
-        ).all()
+        trabajos = Trabajo.query.filter(
+            Trabajo.cliente_id == user_id,
+            Trabajo.estado != "cotizacion",
+        ).order_by(Trabajo.fecha_creacion.desc()).all()
 
         res = []
         for t in trabajos:
