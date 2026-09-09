@@ -11,9 +11,10 @@ Maneja:
 8. Verificación de Códigos
 9. Subida de Foto de Perfil
 """
-import secrets
 import random
 import os   # ✅ NECESARIO para leer variables de entorno
+import re
+import secrets
 from datetime import datetime, timedelta
 # pylint: disable=no-name-in-module
 from flask import Blueprint, request, jsonify
@@ -44,6 +45,18 @@ cloudinary.config(
 )
 
 auth_bp = Blueprint('auth', __name__)
+
+
+def _validar_identidad(nombre, email, telefono):
+    """Nombre y apellidos, email y teléfono obligatorios."""
+    if not (nombre or "").strip() or not (email or "").strip():
+        return "Faltan nombre o correo"
+    if len((nombre or "").split()) < 2:
+        return "Escribe nombre y apellidos"
+    digits = re.sub(r"\D", "", telefono or "")
+    if len(digits) < 9:
+        return "El teléfono es obligatorio (mínimo 9 dígitos)"
+    return None
 
 # ==========================================
 # 1. SISTEMA DE CÓDIGOS (Send/Verify) - DB
@@ -198,6 +211,10 @@ def register_montador():
     if not all([nombre, email, password, codigo_usuario]):
         return jsonify({'error': 'Faltan datos obligatorios'}), 400
 
+    ident = _validar_identidad(nombre, email, telefono)
+    if ident:
+        return jsonify({'error': ident}), 400
+
     # Verificar Código en DB
     record = Code.query.filter_by(email=email).first()
     if not record or record.code != codigo_usuario:
@@ -254,6 +271,61 @@ def register_montador():
         return jsonify({'error': 'Error interno del servidor'}), 500
 
 
+@auth_bp.route('/cliente/registro', methods=['POST'])
+def register_cliente():
+    """Registro de cliente: nombre, apellidos, teléfono, email y código."""
+    data = request.json or {}
+    nombre = data.get('nombre')
+    email = data.get('email')
+    password = data.get('password')
+    telefono = data.get('telefono')
+    codigo_usuario = data.get('codigo')
+
+    if not all([nombre, email, password, codigo_usuario]):
+        return jsonify({'error': 'Faltan datos obligatorios'}), 400
+
+    ident = _validar_identidad(nombre, email, telefono)
+    if ident:
+        return jsonify({'error': ident}), 400
+
+    record = Code.query.filter_by(email=email).first()
+    if not record or record.code != codigo_usuario:
+        return jsonify({'error': 'Código de verificación incorrecto'}), 400
+
+    if (Cliente.query.filter_by(email=email).first() or
+            Montador.query.filter_by(email=email).first()):
+        return jsonify({'error': 'El usuario ya existe'}), 400
+
+    try:
+        nuevo = Cliente(
+            email=email,
+            nombre=nombre.strip(),
+            telefono=telefono,
+            password_hash=generate_password_hash(password),
+        )
+        db.session.add(nuevo)
+        db.session.delete(record)
+        db.session.commit()
+        token = create_access_token(
+            identity=str(nuevo.id),
+            additional_claims={"rol": "cliente"},
+        )
+        return jsonify({
+            'message': 'Cliente registrado',
+            'access_token': token,
+            'user': {
+                'id': nuevo.id,
+                'nombre': nuevo.nombre,
+                'email': nuevo.email,
+                'tipo': 'cliente',
+            },
+        }), 201
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        db.session.rollback()
+        print(f"Error Registro Cliente: {e}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+
 # B) REGISTRO GENÉRICO (Legacy / Backup)
 @auth_bp.route('/auth/register', methods=['POST'])
 def register():
@@ -267,6 +339,10 @@ def register():
 
     if not email or not password or not nombre:
         return jsonify({'message': 'Faltan datos obligatorios'}), 400
+
+    ident = _validar_identidad(nombre, email, telefono)
+    if ident:
+        return jsonify({'message': ident}), 400
 
     if (Cliente.query.filter_by(email=email).first() or
             Montador.query.filter_by(email=email).first()):
@@ -330,6 +406,10 @@ def publicar_y_registrar():
 
         if not email or not password:
             return jsonify({"error": "Faltan credenciales"}), 400
+
+        ident = _validar_identidad(nombre, email, telefono)
+        if ident:
+            return jsonify({"error": ident}), 400
 
         if (Cliente.query.filter_by(email=email).first() or
                 Montador.query.filter_by(email=email).first()):
