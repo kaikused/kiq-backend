@@ -11,6 +11,7 @@ Maneja:
 8. Verificación de Códigos
 9. Subida de Foto de Perfil
 """
+import secrets
 import random
 import os   # ✅ NECESARIO para leer variables de entorno
 from datetime import datetime, timedelta
@@ -21,7 +22,7 @@ import cloudinary           # ✅ NECESARIO para configurar
 import cloudinary.uploader
 
 from flask_jwt_extended import (
-    create_access_token, jwt_required, get_jwt_identity, get_jwt
+    create_access_token, decode_token, jwt_required, get_jwt_identity, get_jwt
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -167,11 +168,6 @@ def login_universal():
             'role': 'montador',
             'redirect': '/panel-montador'
         }), 200
-
-    # 3. Admin (Hardcoded por seguridad temporal)
-    if email == 'admin@kiq.es' and password == 'admin123':
-        token = create_access_token(identity='0', additional_claims={'rol': 'admin'})
-        return jsonify({"success": True, "token": token, "role": "admin"}), 200
 
     return jsonify({'message': 'Credenciales incorrectas'}), 401
 
@@ -598,14 +594,72 @@ def check_email():
         return jsonify({"status": "existente"}), 200
     return jsonify({"status": "nuevo"}), 200
 
+def _admin_secret():
+    """Clave del panel. En producción debe vivir en ADMIN_TOKEN (Render)."""
+    return os.getenv('ADMIN_TOKEN', 'kiq2025master')
+
+
 def _validar_admin_token():
-    """Función auxiliar para validar la cabecera estándar Bearer del Admin."""
+    """Acepta JWT de /api/admin/login o el secreto ADMIN_TOKEN."""
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith("Bearer "):
         return False
-    # Extraer el token después de 'Bearer '
-    token = auth_header.split(" ")[1]
-    return token == 'kiq2025master'
+    token = auth_header.split(" ", 1)[1]
+    secret = _admin_secret()
+    if token and secrets.compare_digest(token, secret):
+        return True
+    try:
+        decoded = decode_token(token)
+        return decoded.get('rol') == 'admin'
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+
+
+@auth_bp.route('/admin/login', methods=['POST'])
+def admin_login():
+    """El front no lleva la clave: se valida aquí y se devuelve un JWT corto."""
+    data = request.get_json(silent=True) or {}
+    password = (data.get('password') or '').strip()
+    secret = _admin_secret()
+    if not password or not secrets.compare_digest(password, secret):
+        return jsonify({'error': 'Acceso denegado'}), 401
+    token = create_access_token(
+        identity='admin',
+        additional_claims={'rol': 'admin'},
+        expires_delta=timedelta(hours=12),
+    )
+    return jsonify({'token': token}), 200
+
+
+@auth_bp.route('/admin/reset-password', methods=['POST'])
+def admin_reset_password():
+    """El admin define una contraseña nueva para cliente o montador."""
+    if not _validar_admin_token():
+        return jsonify({'error': 'Acceso denegado. Token inválido.'}), 401
+
+    data = request.get_json(silent=True) or {}
+    user_id = data.get('user_id')
+    tipo = (data.get('tipo') or '').strip().lower()
+    new_password = data.get('new_password') or ''
+
+    if not user_id or tipo not in ('cliente', 'montador'):
+        return jsonify({'error': 'Faltan datos'}), 400
+    if len(new_password) < 8:
+        return jsonify({'error': 'La contraseña debe tener al menos 8 caracteres'}), 400
+
+    user = (
+        Montador.query.get(int(user_id)) if tipo == 'montador'
+        else Cliente.query.get(int(user_id))
+    )
+    if not user:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+
+    user.password_hash = generate_password_hash(new_password)
+    db.session.commit()
+    return jsonify({
+        'message': 'Contraseña actualizada',
+        'email': user.email,
+    }), 200
 
 @auth_bp.route('/admin/todos-los-trabajos', methods=['GET'])
 def admin_get_todos_los_trabajos():
