@@ -57,10 +57,10 @@ def build_conversion_payload(
         conversion.update({
             "headline": f"Tu montaje por {total:.0f}€",
             "subheadline": "Precio cerrado · Incluye desplazamiento y montaje profesional",
-            "cta_primary": "Reservar montador ahora",
-            "cta_secondary": "Enviarme presupuesto por email",
-            "urgency": "Montadores disponibles esta semana en tu zona",
-            "microcopy_registro": "Crea tu cuenta en 30 segundos y publica tu solicitud",
+            "cta_primary": "Cotizar por WhatsApp",
+            "cta_secondary": "Pedir otro precio",
+            "urgency": "Montadores en Málaga y Costa del Sol",
+            "microcopy_registro": "Sin cuenta: te llega el presupuesto por WhatsApp",
             "precio_gancho": f"{total:.0f}€",
         })
 

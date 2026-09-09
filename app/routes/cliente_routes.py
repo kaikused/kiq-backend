@@ -20,9 +20,10 @@ cliente_bp = Blueprint('cliente', __name__)
 @jwt_required()
 def publicar_trabajo_logueado():
     """
-    Guarda un trabajo YA calculado.
-    Esta ruta se llama DESPUÉS de usar la calculadora avanzada,
-    cuando el usuario logueado pulsa 'Confirmar/Publicar'.
+    OBSOLETO. Dejaba el trabajo en 'cotizacion' para cobrar en la app.
+
+    El tablero nuevo usa app.jobs.crear_trabajo_pendiente (estado pendiente,
+    visible para montadores). No llames esta ruta desde el cotizador.
     """
     claims = get_jwt()
     # Verificación de Rol
