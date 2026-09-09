@@ -98,7 +98,7 @@ def create_app():
 
                 try:
                     conn.execute(text(
-                        "ALTER TABLE trabajo ALTER COLUMN foto_finalizacion TYPE TEXT"
+                        "ALTER TABLE trabajo ADD COLUMN IF NOT EXISTS cobrado BOOLEAN DEFAULT FALSE"
                     ))
                     conn.commit()
                 except Exception:  # pylint: disable=broad-exception-caught

@@ -12,7 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.models import Cliente, Trabajo, Montador
 from app.extensions import db
 from app.storage import upload_image_to_gcs, url_foto_almacenada
-from app.gems_service import recargar_gemas
+from app.jobs import aplicar_cobro, metodo_cobro_publico
 
 montador_bp = Blueprint('montador', __name__)
 
@@ -65,7 +65,8 @@ def get_trabajos_disponibles():
                 "etiquetas": t.etiquetas,
                 "cliente_nombre": cliente.nombre if cliente else "Usuario Kiq",
                 "cliente_telefono": None,
-                "metodo_pago": t.metodo_pago,
+                "metodo_pago": metodo_cobro_publico(t.metodo_pago) or "efectivo",
+                "cobrado": bool(getattr(t, "cobrado", False)),
                 "desglose": desglose_data
             })
         return jsonify(res), 200
@@ -116,7 +117,8 @@ def get_mis_trabajos_montador():
                 "cliente_info": cliente_info,
                 "imagenes_urls": t.imagenes_urls,
                 "desglose": desglose_data,
-                "metodo_pago": t.metodo_pago
+                "metodo_pago": metodo_cobro_publico(t.metodo_pago) or "efectivo",
+                "cobrado": bool(getattr(t, "cobrado", False)),
             })
         return jsonify(res), 200
     except Exception as e: # pylint: disable=broad-exception-caught
@@ -140,40 +142,6 @@ def aceptar_trabajo(trabajo_id):
         if not trabajo or trabajo.estado != 'pendiente' or trabajo.montador_id is not None:
             return jsonify({"error": "Trabajo no disponible"}), 400
 
-        # --- LÓGICA ANZUELO STRIPE ---
-        if trabajo.metodo_pago == 'stripe':
-            if not montador.stripe_account_id:
-                return jsonify({
-                    "error": "stripe_required",
-                    "message": (
-                        "¡Buenas noticias! Este trabajo se paga con tarjeta. "
-                        "Conecta tu cuenta bancaria para cobrar."
-                    )
-                }), 428
-
-        # --- Lógica de Gemas (Comisión Efectivo) ---
-        if trabajo.metodo_pago == 'efectivo_gemas':
-            coste_gemas = int(trabajo.precio_calculado * 0.10 * 10)
-
-            # 🎁 BONIFICACIÓN: Primer trabajo GRATIS
-            trabajos_previos = Trabajo.query.filter_by(montador_id=montador_id).count()
-            if trabajos_previos == 0:
-                coste_gemas = 0
-
-            # Verificar saldo
-            if montador.wallet.saldo < coste_gemas:
-                return jsonify({
-                    "error": f"Necesitas {coste_gemas} Gemas para aceptar este trabajo."
-                }), 402
-
-            if coste_gemas > 0:
-                recargar_gemas(
-                    wallet_id=montador.wallet.id,
-                    cantidad_recarga=-coste_gemas,
-                    descripcion=f'Comisión trabajo #{trabajo.id}'
-                )
-
-        # Asignación final
         trabajo.montador_id = montador.id
         trabajo.estado = 'aceptado'
         db.session.commit()
@@ -192,6 +160,34 @@ def aceptar_trabajo(trabajo_id):
     except Exception as e: # pylint: disable=broad-exception-caught
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+
+
+@montador_bp.route('/montador/trabajo/<int:trabajo_id>/cobro', methods=['POST'])
+@jwt_required()
+def montador_marcar_cobro(trabajo_id):
+    """Bizum o efectivo, y si ya está cobrado. Sin Stripe ni gemas."""
+    claims = get_jwt()
+    if claims.get('rol') != 'montador':
+        return jsonify({"error": "Acceso no autorizado"}), 403
+
+    montador_id = int(get_jwt_identity())
+    trabajo = Trabajo.query.filter_by(
+        id=trabajo_id, montador_id=montador_id
+    ).first()
+    if not trabajo:
+        return jsonify({"error": "Trabajo no encontrado"}), 404
+    if trabajo.estado not in (
+        'aceptado', 'revision_cliente', 'completado', 'aprobado_cliente_stripe'
+    ):
+        return jsonify({"error": "Este trabajo no admite cobro ahora"}), 400
+
+    aplicar_cobro(trabajo, request.json or {})
+    db.session.commit()
+    return jsonify({
+        "success": True,
+        "metodo_pago": metodo_cobro_publico(trabajo.metodo_pago) or "efectivo",
+        "cobrado": bool(trabajo.cobrado),
+    }), 200
 
 
 @montador_bp.route(
@@ -261,23 +257,12 @@ def reportar_trabajo_fallido(trabajo_id):
         if trabajo.estado != 'aceptado':
             return jsonify({"error": "Solo se pueden cancelar trabajos activos"}), 400
 
-        gemas_a_devolver = 0
-        if trabajo.metodo_pago == 'efectivo_gemas':
-            gemas_a_devolver = int(trabajo.precio_calculado * 0.10 * 10)
-
-        if gemas_a_devolver > 0:
-            recargar_gemas(
-                wallet_id=trabajo.montador.wallet.id,
-                cantidad_recarga=gemas_a_devolver,
-                descripcion=f'Reembolso por trabajo fallido #{trabajo.id}'
-            )
-
         trabajo.estado = 'cancelado_incidencia'
         db.session.commit()
 
         return jsonify({
             "success": True,
-            "message": f"Trabajo cancelado. Se te han devuelto {gemas_a_devolver} gemas."
+            "message": "Trabajo cancelado. El tablero queda libre para Kiq."
         }), 200
 
     except Exception as e: # pylint: disable=broad-exception-caught

@@ -12,6 +12,7 @@ from app.models import Cliente, Trabajo, Montador, Product
 from app.extensions import db
 from app.email_service import enviar_resumen_presupuesto
 from app.storage import url_foto_almacenada
+from app.jobs import metodo_cobro_publico
 
 cliente_bp = Blueprint('cliente', __name__)
 
@@ -137,7 +138,8 @@ def get_mis_trabajos():
                 "imagenes_urls": t.imagenes_urls,
                 "foto_finalizacion": url_foto_almacenada(t.foto_finalizacion),
                 "desglose": desglose,
-                "metodo_pago": t.metodo_pago,
+                "metodo_pago": metodo_cobro_publico(t.metodo_pago) or "efectivo",
+                "cobrado": bool(getattr(t, "cobrado", False)),
                 "payment_intent_id": t.payment_intent_id,
                 "etiquetas": t.etiquetas
             })
@@ -341,20 +343,10 @@ def confirmar_pago_cliente(trabajo_id):
                         print(f"✅ Producto #{product_id} marcado oficialmente como VENDIDO.")
         # -------------------------------------------------------------
 
-        if trabajo.metodo_pago == 'efectivo_gemas':
-            trabajo.estado = 'completado'
-            db.session.commit()
-            return jsonify({
-                "success": True, "message": "Finalizado.", "estado": "completado"
-            }), 200
-
-        trabajo.estado = 'aprobado_cliente_stripe'
+        trabajo.estado = 'completado'
         db.session.commit()
-
         return jsonify({
-            "success": True,
-            "message": "Aprobación recibida.",
-            "estado": "aprobado_cliente_stripe"
+            "success": True, "message": "Finalizado.", "estado": "completado"
         }), 200
 
     except Exception as e: # pylint: disable=broad-exception-caught

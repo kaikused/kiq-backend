@@ -31,6 +31,7 @@ from app import db
 # Importamos tus modelos REALES (Agregado Wallet aquí para evitar C0415)
 from app.models import Cliente, Montador, Trabajo, Code, Wallet
 from app.jobs import publicar_trabajo as publicar_trabajo_tablero
+from app.jobs import aplicar_cobro, metodo_cobro_publico
 # IMPORTAMOS LOS SERVICIOS ROBUSTOS
 from app.email_service import enviar_codigo_verificacion, enviar_email_generico
 from app.gems_service import asignar_bono_bienvenida
@@ -767,6 +768,8 @@ def _trabajo_admin_json(t):
         "montador": montador_nombre,
         "estado": t.estado,
         "imagenes_urls": t.imagenes_urls or [],
+        "metodo_pago": metodo_cobro_publico(t.metodo_pago) or "efectivo",
+        "cobrado": bool(getattr(t, "cobrado", False)),
     }
 
 
@@ -804,6 +807,7 @@ def admin_editar_trabajo(job_id):
         cliente = Cliente.query.get(trabajo.cliente_id)
         if cliente:
             cliente.telefono = (data.get('telefono') or '').strip() or cliente.telefono
+    aplicar_cobro(trabajo, data)
 
     try:
         db.session.commit()

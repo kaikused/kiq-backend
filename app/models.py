@@ -185,13 +185,14 @@ class Trabajo(db.Model):
     payment_intent_id = db.Column(db.String(100), nullable=True, unique=True)
     # Corrección línea larga
     metodo_pago = db.Column(
-        db.String(20), nullable=False, default='stripe', server_default='stripe'
+        db.String(20), nullable=False, default='efectivo', server_default='efectivo'
     )
     imagenes_urls = db.Column(db.JSON, nullable=True)
     etiquetas = db.Column(db.JSON, nullable=True)
     desglose = db.Column(db.JSON, nullable=True)
     foto_finalizacion = db.Column(db.Text, nullable=True)
-    
+    cobrado = db.Column(db.Boolean, nullable=False, default=False)
+
     # Campo legacy
     precio_estimado = db.Column(db.Float, nullable=True)
 

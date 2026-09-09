@@ -39,7 +39,8 @@ def crear_trabajo_inbox(cliente_id: int, payload: dict) -> Trabajo:
         imagenes_urls=payload.get("imagenes_urls") or [],
         etiquetas=payload.get("etiquetas") or {},
         desglose=payload.get("desglose"),
-        metodo_pago="efectivo_gemas",
+        metodo_pago="efectivo",
+        cobrado=False,
     )
     db.session.add(trabajo)
     db.session.commit()
@@ -67,3 +68,23 @@ def publicar_trabajo(trabajo: Trabajo) -> Trabajo:
     trabajo.montador_id = None
     db.session.commit()
     return trabajo
+
+
+def metodo_cobro_publico(valor):
+    """bizum | efectivo. stripe/gemas viejos no cuentan como método MVP."""
+    v = (valor or "").strip().lower()
+    if v == "bizum":
+        return "bizum"
+    if v in ("efectivo", "efectivo_gemas", "cash"):
+        return "efectivo"
+    return None
+
+
+def aplicar_cobro(trabajo: Trabajo, data: dict) -> None:
+    """Actualiza método (Bizum/efectivo) y si está cobrado."""
+    if "metodo_pago" in data and data.get("metodo_pago") is not None:
+        metodo = metodo_cobro_publico(data.get("metodo_pago"))
+        if metodo:
+            trabajo.metodo_pago = metodo
+    if "cobrado" in data:
+        trabajo.cobrado = bool(data.get("cobrado"))
