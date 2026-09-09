@@ -259,6 +259,7 @@ def get_tarifario_publico():
             "necesita_anclaje": data.get("necesita_anclaje", False),
         }
         for key, data in TARIFARIO.items()
+        if not data.get("solo_admin")
     ]
     return jsonify({
         "status": "success",

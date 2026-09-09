@@ -29,6 +29,21 @@ def calcular_precio_item(tipo: str, cantidad: int, attrs: dict) -> dict:
             "consulta": True,
         }
 
+    if tipo == "otros":
+        try:
+            precio_unitario = float(attrs.get("precio_unitario") or attrs.get("precio") or 0)
+        except (TypeError, ValueError):
+            precio_unitario = 0.0
+        nombre = (attrs.get("concepto") or attrs.get("texto") or "Otros").strip() or "Otros"
+        return {
+            "precio_unitario": precio_unitario,
+            "subtotal": precio_unitario * cantidad,
+            "coste_extras": 0,
+            "extras": [],
+            "necesita_anclaje": False,
+            "display_name": nombre[:80],
+        }
+
     tarifas = TARIFARIO.get(tipo, {"precio_base": 40, "necesita_anclaje": False})
     precio_unitario = tarifas.get("precio_base", 40)
     reglas = tarifas.get("reglas_precio", {})

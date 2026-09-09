@@ -295,6 +295,20 @@ def armar_presupuesto_manual(data: dict):
             cantidad = max(1, int(linea.get("cantidad") or 1))
         except (TypeError, ValueError):
             cantidad = 1
+        if tipo == "otros":
+            try:
+                precio = float(linea.get("precio") or 0)
+            except (TypeError, ValueError):
+                precio = 0.0
+            if precio <= 0:
+                continue
+            concepto = (linea.get("concepto") or "").strip() or "Otros"
+            items.append({
+                "tipo": "otros",
+                "cantidad": cantidad,
+                "atributos": {"precio_unitario": precio, "concepto": concepto[:80]},
+            })
+            continue
         attrs = {}
         if tipo == "armario":
             attrs["tipo_puerta"] = (linea.get("tipo_puerta") or "batiente").strip()

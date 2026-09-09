@@ -45,6 +45,13 @@ class TestPricingEngine(unittest.TestCase):
         totales = total_final(10, 0, 5, False)
         self.assertEqual(totales["total_presupuesto"], 30)
 
+    def test_otros_precio_manual(self):
+        result = calcular_precio_item("otros", 2, {"precio_unitario": 120, "concepto": "Cama nido"})
+        self.assertEqual(result["precio_unitario"], 120)
+        self.assertEqual(result["subtotal"], 240)
+        self.assertEqual(result["display_name"], "Cama nido")
+        self.assertFalse(result["necesita_anclaje"])
+
     def test_balda_con_anclaje(self):
         result = calcular_precio_item("balda", 1, {})
         self.assertEqual(result["precio_unitario"], 30)

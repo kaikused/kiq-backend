@@ -185,4 +185,12 @@ TARIFARIO = {
         "keywords": ["tendedero", "tendederos", "drying rack"],
         "display_name": {"es": "Tendedero"},
     },
+    "otros": {
+        "precio_base": 0,
+        "necesita_anclaje": False,
+        "keywords": [],
+        "display_name": {"es": "Otros"},
+        "precio_manual": True,
+        "solo_admin": True,
+    },
 }
