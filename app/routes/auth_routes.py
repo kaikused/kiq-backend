@@ -31,7 +31,13 @@ from app import db
 # Importamos tus modelos REALES (Agregado Wallet aquí para evitar C0415)
 from app.models import Cliente, Montador, Trabajo, Code, Wallet
 from app.jobs import publicar_trabajo as publicar_trabajo_tablero
-from app.jobs import aplicar_cobro, metodo_cobro_publico, zona_desde_direccion
+from app.jobs import (
+    aplicar_cobro,
+    aplicar_estado,
+    metodo_cobro_publico,
+    zona_desde_direccion,
+)
+from app.storage import codigo_desde_carpeta, url_foto_almacenada
 # IMPORTAMOS LOS SERVICIOS ROBUSTOS
 from app.email_service import enviar_codigo_verificacion, enviar_email_generico
 from app.gems_service import asignar_bono_bienvenida
@@ -772,6 +778,8 @@ def _trabajo_admin_json(t):
         "cobrado": bool(getattr(t, "cobrado", False)),
         "zona": getattr(t, "zona", None) or zona_desde_direccion(t.direccion),
         "fecha_visita": t.fecha_visita.isoformat() if getattr(t, "fecha_visita", None) else None,
+        "foto_finalizacion": url_foto_almacenada(getattr(t, "foto_finalizacion", None)),
+        "pdf_code": codigo_desde_carpeta(getattr(t, "pdf_carpeta", None) or "") or None,
     }
 
 
@@ -810,6 +818,11 @@ def admin_editar_trabajo(job_id):
         if cliente:
             cliente.telefono = (data.get('telefono') or '').strip() or cliente.telefono
     aplicar_cobro(trabajo, data)
+    if "estado" in data and data.get("estado") is not None:
+        try:
+            aplicar_estado(trabajo, data.get("estado"))
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
 
     try:
         db.session.commit()

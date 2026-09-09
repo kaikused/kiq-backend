@@ -46,6 +46,7 @@ def payload_desde_presupuesto(data: dict) -> dict:
         "imagenes_urls": data.get("imagenes") or data.get("imagenes_urls") or [],
         "desglose": data.get("desglose"),
         "etiquetas": data.get("etiquetas") or {},
+        "carpeta_gcs": data.get("carpeta_gcs") or "",
     }
 
 
@@ -66,6 +67,7 @@ def crear_trabajo_inbox(cliente_id: int, payload: dict) -> Trabajo:
         metodo_pago="efectivo",
         cobrado=False,
         zona=zona_desde_direccion(direccion),
+        pdf_carpeta=(payload.get("carpeta_gcs") or "").strip() or None,
     )
     db.session.add(trabajo)
     db.session.commit()
@@ -117,3 +119,24 @@ def aplicar_cobro(trabajo: Trabajo, data: dict) -> None:
         trabajo.zona = (data.get("zona") or "").strip()[:120] or None
     if "fecha_visita" in data:
         trabajo.fecha_visita = parse_fecha_visita(data.get("fecha_visita"))
+
+
+ESTADOS_ADMIN = (
+    "cotizacion",
+    "pendiente",
+    "aceptado",
+    "revision_cliente",
+    "completado",
+    "cancelado",
+    "cancelado_incidencia",
+)
+
+
+def aplicar_estado(trabajo: Trabajo, estado):
+    """El admin puede cerrar o reabrir un trabajo."""
+    est = (estado or "").strip()
+    if est not in ESTADOS_ADMIN:
+        raise ValueError("Estado no válido")
+    trabajo.estado = est
+    if est in ("cotizacion", "pendiente"):
+        trabajo.montador_id = None

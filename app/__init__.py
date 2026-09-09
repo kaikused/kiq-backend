@@ -106,6 +106,9 @@ def create_app():
                     conn.execute(text(
                         "ALTER TABLE trabajo ADD COLUMN IF NOT EXISTS fecha_visita TIMESTAMP"
                     ))
+                    conn.execute(text(
+                        "ALTER TABLE trabajo ADD COLUMN IF NOT EXISTS pdf_carpeta VARCHAR(120)"
+                    ))
                     conn.commit()
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
