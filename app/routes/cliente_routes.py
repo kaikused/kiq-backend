@@ -4,6 +4,7 @@ pagos (Stripe/Gemas) y gestión de estado de servicios.
 """
 import json
 import stripe
+from datetime import datetime
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
 from sqlalchemy.exc import SQLAlchemyError
@@ -345,6 +346,7 @@ def confirmar_pago_cliente(trabajo_id):
         # -------------------------------------------------------------
 
         trabajo.estado = 'completado'
+        trabajo.fecha_completado = datetime.utcnow()
         db.session.commit()
         return jsonify({
             "success": True, "message": "Finalizado.", "estado": "completado"

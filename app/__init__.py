@@ -110,6 +110,9 @@ def create_app():
                         "ALTER TABLE trabajo ADD COLUMN IF NOT EXISTS pdf_carpeta VARCHAR(120)"
                     ))
                     conn.execute(text(
+                        "ALTER TABLE trabajo ADD COLUMN IF NOT EXISTS fecha_completado TIMESTAMP"
+                    ))
+                    conn.execute(text(
                         "ALTER TABLE cliente ADD COLUMN IF NOT EXISTS es_invitado BOOLEAN DEFAULT FALSE"
                     ))
                     conn.commit()

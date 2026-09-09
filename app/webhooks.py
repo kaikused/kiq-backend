@@ -4,6 +4,7 @@ Maneja las notificaciones asíncronas de pagos y cambios de estado.
 """
 import os
 import stripe
+from datetime import datetime
 from flask import Blueprint, request, jsonify
 from dotenv import load_dotenv
 
@@ -122,6 +123,7 @@ def handle_payment_intent_succeeded(payment_intent):
         # Si estaba en 'aprobado_cliente_stripe', significa que se capturó el pago final
         if trabajo.estado == 'aprobado_cliente_stripe':
             trabajo.estado = 'completado'
+            trabajo.fecha_completado = datetime.utcnow()
             db.session.commit()
 
             # TRANSFERENCIA AL MONTADOR (Split Payment)

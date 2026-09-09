@@ -35,6 +35,7 @@ from app.jobs import (
     aplicar_cobro,
     aplicar_estado,
     armar_presupuesto_manual,
+    completar_trabajo_admin,
     crear_trabajo_desde_presupuesto,
     ficha_es_invitado,
     metodo_cobro_publico,
@@ -759,10 +760,12 @@ def _trabajo_admin_json(t):
     """Serializa un trabajo para el panel admin."""
     cliente = Cliente.query.get(t.cliente_id)
     montador_nombre = "Sin asignar"
+    montador_telefono = ""
     if t.montador_id:
         m = Montador.query.get(t.montador_id)
         if m:
             montador_nombre = m.nombre
+            montador_telefono = m.telefono or ""
 
     precio_final = getattr(t, 'precio_calculado', 0)
     if getattr(t, 'precio_estimado', None):
@@ -772,9 +775,13 @@ def _trabajo_admin_json(t):
     if email_cliente.endswith("@leads.kiq.local"):
         email_cliente = ""
 
+    fecha_hecho = getattr(t, "fecha_completado", None)
+    es_visitante = ficha_es_invitado(t)
+
     return {
         "id": t.id,
         "fecha": t.fecha_creacion.strftime('%Y-%m-%d %H:%M'),
+        "fecha_completado": fecha_hecho.strftime('%Y-%m-%d %H:%M') if fecha_hecho else None,
         "cliente": cliente.nombre if cliente else "Desconocido",
         "email_cliente": email_cliente,
         "telefono_cliente": cliente.telefono if cliente else "",
@@ -782,6 +789,7 @@ def _trabajo_admin_json(t):
         "direccion": t.direccion,
         "precio": precio_final,
         "montador": montador_nombre,
+        "montador_telefono": montador_telefono,
         "estado": t.estado,
         "imagenes_urls": t.imagenes_urls or [],
         "metodo_pago": metodo_cobro_publico(t.metodo_pago) or "efectivo",
@@ -790,7 +798,8 @@ def _trabajo_admin_json(t):
         "fecha_visita": t.fecha_visita.isoformat() if getattr(t, "fecha_visita", None) else None,
         "foto_finalizacion": url_foto_almacenada(getattr(t, "foto_finalizacion", None)),
         "pdf_code": codigo_desde_carpeta(getattr(t, "pdf_carpeta", None) or "") or None,
-        "registrado": not ficha_es_invitado(t),
+        "registrado": not es_visitante,
+        "origen": "visitante" if es_visitante else "cuenta",
     }
 
 
@@ -890,6 +899,28 @@ def admin_publicar_trabajo(job_id):
         db.session.rollback()
         print(f"Error admin publicar: {e}")
         return jsonify({'error': 'No se pudo publicar'}), 500
+
+
+@auth_bp.route('/admin/trabajo/<int:job_id>/completar', methods=['POST'])
+def admin_completar_trabajo(job_id):
+    """Marca un montaje (visitante o cuenta) como terminado. Entra al historial."""
+    if not _validar_admin_token():
+        return jsonify({'error': 'Acceso denegado. Token inválido.'}), 401
+
+    trabajo = Trabajo.query.get(job_id)
+    if not trabajo:
+        return jsonify({'error': 'Trabajo no encontrado'}), 404
+
+    data = request.json or {}
+    try:
+        completar_trabajo_admin(trabajo, cobrado=data.get("cobrado"))
+        return jsonify(_trabajo_admin_json(trabajo)), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        db.session.rollback()
+        print(f"Error admin completar: {e}")
+        return jsonify({'error': 'No se pudo marcar como terminado'}), 500
 
 
 @auth_bp.route('/admin/cotizar-manual', methods=['POST'])

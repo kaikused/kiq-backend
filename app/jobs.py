@@ -220,6 +220,32 @@ def aplicar_estado(trabajo: Trabajo, estado):
     trabajo.estado = est
     if est in ("cotizacion", "pendiente"):
         trabajo.montador_id = None
+    if est == "completado":
+        if not getattr(trabajo, "fecha_completado", None):
+            trabajo.fecha_completado = datetime.utcnow()
+    else:
+        trabajo.fecha_completado = None
+
+
+ESTADOS_COMPLETABLES = (
+    "aceptado",
+    "revision_cliente",
+    "en_progreso",
+    "aprobado_cliente_stripe",
+)
+
+
+def completar_trabajo_admin(trabajo: Trabajo, cobrado=None) -> Trabajo:
+    """Cierra un montaje (visitante o cuenta) y lo deja en el historial."""
+    if trabajo.estado == "completado":
+        raise ValueError("Este montaje ya está terminado")
+    if trabajo.estado not in ESTADOS_COMPLETABLES:
+        raise ValueError("Confirma o publica el montaje antes de marcarlo como terminado")
+    aplicar_estado(trabajo, "completado")
+    if cobrado is not None:
+        trabajo.cobrado = bool(cobrado)
+    db.session.commit()
+    return trabajo
 
 
 def _carpeta_pdf(trabajo, nombre):

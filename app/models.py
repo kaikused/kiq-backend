@@ -195,6 +195,7 @@ class Trabajo(db.Model):
     cobrado = db.Column(db.Boolean, nullable=False, default=False)
     zona = db.Column(db.String(120), nullable=True)
     fecha_visita = db.Column(db.DateTime, nullable=True)
+    fecha_completado = db.Column(db.DateTime, nullable=True)
     pdf_carpeta = db.Column(db.String(120), nullable=True)
 
     # Campo legacy
