@@ -10,6 +10,36 @@ from ..storage import comprimir_imagen
 MARCA = (109, 40, 217)
 
 
+def _email_para_pdf(email) -> str:
+    e = (email or "").strip()
+    if not e or e.endswith("@leads.kiq.local") or e.startswith("invitado."):
+        return ""
+    return e
+
+
+def _fecha_visita_txt(valor) -> str:
+    if not valor:
+        return ""
+    if isinstance(valor, datetime):
+        return valor.strftime("%d/%m/%Y %H:%M")
+    texto = str(valor).strip()
+    try:
+        if texto.endswith("Z"):
+            texto = texto[:-1]
+        return datetime.fromisoformat(texto).strftime("%d/%m/%Y %H:%M")
+    except ValueError:
+        return _txt(texto)
+
+
+def _pago_txt(valor) -> str:
+    v = (valor or "").strip().lower()
+    if v == "bizum":
+        return "Bizum"
+    if v in ("efectivo", "efectivo_gemas", "cash"):
+        return "Efectivo"
+    return ""
+
+
 def _txt(value) -> str:
     if value is None:
         return ""
@@ -45,7 +75,9 @@ def generar_pdf_presupuesto(payload: dict) -> bytes:
     descripcion = _txt(payload.get("descripcion") or "Montaje de muebles")
     precio = payload.get("precio_calculado") or 0
     telefono = _txt(payload.get("telefono") or "")
-    email = _txt(payload.get("email") or "")
+    email = _txt(_email_para_pdf(payload.get("email")))
+    fecha_visita = _fecha_visita_txt(payload.get("fecha_visita"))
+    metodo_pago = _pago_txt(payload.get("metodo_pago"))
     desglose = payload.get("desglose") or {}
     consulta = bool(payload.get("consulta_manual") or desglose.get("consulta_manual"))
     titulo = "Consulta de montaje" if consulta else "Presupuesto de montaje"
@@ -69,6 +101,10 @@ def generar_pdf_presupuesto(payload: dict) -> bytes:
         pdf.cell(0, 6, f"Email: {email}", ln=True)
     if telefono:
         pdf.cell(0, 6, f"Telefono: {telefono}", ln=True)
+    if fecha_visita:
+        pdf.cell(0, 6, f"Fecha y hora del montaje: {fecha_visita}", ln=True)
+    if metodo_pago:
+        pdf.cell(0, 6, f"Metodo de pago: {metodo_pago}", ln=True)
     pdf.ln(2)
     pdf.set_font("Helvetica", "B", 11)
     pdf.cell(0, 7, "Que hay que montar", ln=True)

@@ -243,6 +243,8 @@ def regenerar_pdf_trabajo(trabajo):
         "direccion": direccion,
         "descripcion": trabajo.descripcion,
         "precio_calculado": trabajo.precio_calculado,
+        "fecha_visita": getattr(trabajo, "fecha_visita", None),
+        "metodo_pago": trabajo.metodo_pago,
         "desglose": desglose,
         "imagenes": [
             url_foto_almacenada(u) or u for u in (trabajo.imagenes_urls or [])
