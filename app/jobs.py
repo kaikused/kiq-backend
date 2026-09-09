@@ -142,12 +142,24 @@ def crear_trabajo_pendiente(cliente_id: int, payload: dict) -> Trabajo:
     return publicar_trabajo(trabajo)
 
 
+def confirmar_trabajo_visitante(trabajo: Trabajo) -> Trabajo:
+    """Visitante: Kiq acepta el montaje. No sale al tablero de montadores."""
+    if not ficha_es_invitado(trabajo):
+        raise ValueError("Solo cotizaciones de visitante")
+    if trabajo.estado != "cotizacion":
+        raise ValueError("Solo se puede confirmar una cotización en revisión")
+    if not (trabajo.descripcion or "").strip():
+        raise ValueError("Falta la descripción")
+    trabajo.estado = "aceptado"
+    trabajo.montador_id = None
+    db.session.commit()
+    return trabajo
+
+
 def publicar_trabajo(trabajo: Trabajo) -> Trabajo:
-    """Pasa el borrador al tablero (pendiente, sin montador)."""
+    """Cuenta: al tablero. Visitante: Kiq confirma (aceptado, por WhatsApp)."""
     if ficha_es_invitado(trabajo):
-        raise ValueError(
-            "Visitante: no se publica al tablero. Afina el PDF y cierra por WhatsApp."
-        )
+        return confirmar_trabajo_visitante(trabajo)
     if trabajo.estado != "cotizacion":
         raise ValueError("Solo se puede publicar una cotización en revisión")
     direccion = (trabajo.direccion or "").strip()
@@ -203,6 +215,8 @@ def aplicar_estado(trabajo: Trabajo, estado):
     est = (estado or "").strip()
     if est not in ESTADOS_ADMIN:
         raise ValueError("Estado no válido")
+    if ficha_es_invitado(trabajo) and est == "pendiente":
+        est = "aceptado"
     trabajo.estado = est
     if est in ("cotizacion", "pendiente"):
         trabajo.montador_id = None
