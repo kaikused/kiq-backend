@@ -111,7 +111,7 @@ def create_app():
             "http://localhost:3000",
             "http://localhost:3001"
         ],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         "allow_headers": [
             "Content-Type", "Authorization", "X-Requested-With", "Cache-Control"
         ],

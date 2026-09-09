@@ -780,7 +780,7 @@ def admin_get_todos_los_trabajos():
     return jsonify([_trabajo_admin_json(t) for t in trabajos]), 200
 
 
-@auth_bp.route('/admin/trabajo/<int:job_id>', methods=['PATCH'])
+@auth_bp.route('/admin/trabajo/<int:job_id>', methods=['PATCH', 'POST'])
 def admin_editar_trabajo(job_id):
     """Edita precio, dirección, descripción o teléfono del cliente."""
     if not _validar_admin_token():
